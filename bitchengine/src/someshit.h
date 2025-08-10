@@ -1,5 +1,6 @@
 #pragma once
 #include <windows.h>
+#include <windowsx.h>
 #include <wrl.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -12,6 +13,7 @@
 #include <vector>
 #include <comdef.h>
 #include <DirectXMath.h>
+#include "camera.h"
 
 //externals
 #include <d3dx12.h>
@@ -69,6 +71,17 @@ float                  g_angle = 0.0f;    // для вращения
 
 // Камера/проекция (храним отдельно, чтобы не пересчитывать каждый кадр)
 XMFLOAT4X4 g_view, g_proj;
+Camera g_cam;
+
+XMFLOAT3 g_camPos = { 0.0f, 0.0f, -5.0f };
+float g_yaw = 0.0f;   // вращение по оси Y
+float g_pitch = 0.0f; // вращение по оси X
+
+// Настройки
+bool g_mouseLook = false;
+POINT g_lastMouse = { 0, 0 };
+bool g_mouseHasPrev = false;
+
 
 void InitD3D12(HWND hWnd, UINT width, UINT height);
 void RenderFrame();

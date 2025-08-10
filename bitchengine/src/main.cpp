@@ -1,5 +1,6 @@
 ﻿#include "someshit.h"
 #include "textures.h"
+#include <algorithm>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -368,12 +369,12 @@ void InitD3D12(HWND hWnd, UINT width, UINT height) {
 
 	HR(g_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&g_pso)));
 
-	XMVECTOR eye = XMVectorSet(0, 0, -5, 1), at = XMVectorSet(0, 0, 0, 1), up = XMVectorSet(0, 1, 0, 0);
-	XMMATRIX V = XMMatrixLookAtLH(eye, at, up);
-	float aspect = float(width) / float(height);
-	XMMATRIX P = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.1f, 100.0f);
-	XMStoreFloat4x4(&g_view, V);
-	XMStoreFloat4x4(&g_proj, P);
+	g_cam.pos = { 0, 0, -5 };     // старт
+	g_cam.yaw = 0.0f;
+	g_cam.pitch = 0.0f;
+	g_cam.SetLens(XM_PIDIV4, float(width) / float(height), 0.1f, 100.0f);
+	g_cam.UpdateView();             // заполнить g_cam.view
+
 };
 
 void RenderFrame()
@@ -399,20 +400,33 @@ void RenderFrame()
 	g_cmdList->ClearRenderTargetView(rtv, clear, 0, nullptr);
 	g_cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-	static LARGE_INTEGER f = []() { LARGE_INTEGER t; QueryPerformanceFrequency(&t); return t; }();
-	static LARGE_INTEGER p = []() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t; }();
-	LARGE_INTEGER n; QueryPerformanceCounter(&n);
-	float dt = float(double(n.QuadPart - p.QuadPart) / double(f.QuadPart));
-	p = n;
-	g_angle += dt * DirectX::XM_PIDIV4;
+	// delta time
+	static LARGE_INTEGER s_freq = []() { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
+	static LARGE_INTEGER s_prev = []() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t; }();
+	LARGE_INTEGER now; QueryPerformanceCounter(&now);
+	float dt = float(double(now.QuadPart - s_prev.QuadPart) / double(s_freq.QuadPart));
+	s_prev = now;
+
+	// скорость (Shift ускоряет)
+	float speed = g_cam.moveSpeed * ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 4.0f : 1.0f);
+	if (GetAsyncKeyState('W') & 0x8000) g_cam.Walk(+speed * dt);
+	if (GetAsyncKeyState('S') & 0x8000) g_cam.Walk(-speed * dt);
+	if (GetAsyncKeyState('D') & 0x8000) g_cam.Strafe(+speed * dt);
+	if (GetAsyncKeyState('A') & 0x8000) g_cam.Strafe(-speed * dt);
+	if (GetAsyncKeyState('Q') & 0x8000) g_cam.UpDown(-speed * dt);
+	if (GetAsyncKeyState('E') & 0x8000) g_cam.UpDown(+speed * dt);
+
+	g_cam.UpdateView();
 
 	XMMATRIX M = XMMatrixRotationY(g_angle) * XMMatrixRotationX(g_angle * 0.5f);
-	XMMATRIX V = XMLoadFloat4x4(&g_view);
-	XMMATRIX P = XMLoadFloat4x4(&g_proj);
-	XMMATRIX MVP = XMMatrixTranspose(M * V * P);
+	XMMATRIX V = g_cam.View();
+	XMMATRIX P = g_cam.Proj();
 
-	VSConstants c{}; XMStoreFloat4x4(&c.mvp, MVP);
+	XMMATRIX MVP = XMMatrixTranspose(M * V * P);
+	VSConstants c{};
+	XMStoreFloat4x4(&c.mvp, MVP);
 	std::memcpy(g_cbPtr, &c, sizeof(c));
+
 
 	g_cmdList->SetGraphicsRootSignature(g_rootSig.Get());
 	g_cmdList->SetPipelineState(g_pso.Get());
@@ -473,6 +487,56 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_KEYDOWN:
 		if (wParam == VK_ESCAPE) { DestroyWindow(hWnd); }
 		break;
+	case WM_SIZE:
+		if (wParam != SIZE_MINIMIZED) {
+			UINT w = LOWORD(lParam), h = HIWORD(lParam);
+			g_cam.SetLens(g_cam.fovY, float(w) / float(h), g_cam.zn, g_cam.zf);
+		}
+		break;
+	case WM_LBUTTONDOWN:
+		g_mouseLook = true;
+		SetCapture(hWnd);
+
+		g_lastMouse.x = GET_X_LPARAM(lParam);
+		g_lastMouse.y = GET_Y_LPARAM(lParam);
+		g_mouseHasPrev = true;
+		return 0;
+	case WM_LBUTTONUP:
+		g_mouseLook = false;
+		ReleaseCapture();
+		g_mouseHasPrev = false;
+		return 0;
+	case WM_MOUSEMOVE:
+	{
+		if (g_mouseLook)
+		{
+			POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+
+			if (!g_mouseHasPrev) {
+				// если по какой-то причине не было базовой точки — установим и выходим
+				g_lastMouse = p;
+				g_mouseHasPrev = true;
+				return 0;
+			}
+
+			int dx = p.x - g_lastMouse.x;
+			int dy = p.y - g_lastMouse.y;
+			g_lastMouse = p; // обновляем «предыдущую» на текущую
+
+			g_cam.AddYawPitch(dx * g_cam.mouseSens, -dy * g_cam.mouseSens);
+			g_cam.UpdateView();
+			return 0;
+		}
+		break;
+	}
+	case WM_MOUSEWHEEL:
+	{
+		int delta = GET_WHEEL_DELTA_WPARAM(wParam); // 120 за «щелчок»
+		g_cam.fovY = std::clamp(g_cam.fovY - float(delta) * 0.0005f, XM_PI / 12.0f, XM_PI / 1.2f);
+		g_cam.SetLens(g_cam.fovY, g_cam.aspect, g_cam.zn, g_cam.zf);
+		return 0;
+	}
+
 	}
 	return DefWindowProc(hWnd, msg, wParam, lParam);
 }

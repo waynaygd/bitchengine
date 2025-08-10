@@ -139,11 +139,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\camera.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\textures.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="external\d3dx12.h" />
+    <ClInclude Include="src\camera.h" />
     <ClInclude Include="src\someshit.h" />
     <ClInclude Include="src\textures.h" />
   </ItemGroup>
