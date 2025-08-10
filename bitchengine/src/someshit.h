@@ -85,6 +85,7 @@ inline void ThrowIfFailed(HRESULT hr, const char* expr, const char* file, int li
         throw std::runtime_error("D3D12 call failed");
     }
 }
+
 #define HR(x) ThrowIfFailed((x), #x, __FILE__, __LINE__)
 
 auto CompileShaderFromFile = [](const std::wstring& path,
@@ -107,3 +108,5 @@ auto CompileShaderFromFile = [](const std::wstring& path,
         }
         return shader;
     };
+
+ScratchImage LoadTextureFile(const std::wstring& filename);

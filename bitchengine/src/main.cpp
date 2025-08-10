@@ -17,10 +17,10 @@ void CreateCB()
 }
 
 void InitD3D12(HWND hWnd, UINT width, UINT height) {
-	#if defined(_DEBUG)
+#if defined(_DEBUG)
 	if (ComPtr<ID3D12Debug> dbg; SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg))))
 		dbg->EnableDebugLayer();
-	#endif
+#endif
 
 	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&g_factory)))) throw std::runtime_error("DXGI factory failed");
 
@@ -88,7 +88,7 @@ void InitD3D12(HWND hWnd, UINT width, UINT height) {
 	D3D12_CLEAR_VALUE depthClear{}; depthClear.Format = g_depthFormat; depthClear.DepthStencil.Depth = 1.0f; depthClear.DepthStencil.Stencil = 0;
 
 	CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
-	
+
 	HR(g_device->CreateCommittedResource(
 		&heapProps,
 		D3D12_HEAP_FLAG_NONE,
@@ -155,7 +155,6 @@ void InitD3D12(HWND hWnd, UINT width, UINT height) {
 
 	g_indexCount = (UINT)_countof(kIndices);
 
-	// Вспомогатель: создать DEFAULT+UPLOAD буферы и записать копирование в текущий cmd list
 	auto CreateDefaultBuffer = [&](ID3D12GraphicsCommandList* cmd,
 		const void* data, size_t bytes,
 		ComPtr<ID3D12Resource>& defaultBuf,
@@ -164,17 +163,19 @@ void InitD3D12(HWND hWnd, UINT width, UINT height) {
 		{
 			CD3DX12_RESOURCE_DESC bufDesc = CD3DX12_RESOURCE_DESC::Buffer(bytes);
 
-			// DEFAULT
+			// DEFAULT (GPU) — стартуем из COMMON (без ворнинга)
 			CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
-			HR(g_device->CreateCommittedResource(&heapDefault, D3D12_HEAP_FLAG_NONE,
-				&bufDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-				IID_PPV_ARGS(defaultBuf.ReleaseAndGetAddressOf())));
+			HR(g_device->CreateCommittedResource(
+				&heapDefault, D3D12_HEAP_FLAG_NONE,
+				&bufDesc, D3D12_RESOURCE_STATE_COMMON,
+				nullptr, IID_PPV_ARGS(defaultBuf.ReleaseAndGetAddressOf())));
 
-			// UPLOAD
+			// UPLOAD (CPU->GPU)
 			CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
-			HR(g_device->CreateCommittedResource(&heapUpload, D3D12_HEAP_FLAG_NONE,
-				&bufDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-				IID_PPV_ARGS(uploadBuf.ReleaseAndGetAddressOf())));
+			HR(g_device->CreateCommittedResource(
+				&heapUpload, D3D12_HEAP_FLAG_NONE,
+				&bufDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+				nullptr, IID_PPV_ARGS(uploadBuf.ReleaseAndGetAddressOf())));
 
 			// map & copy
 			void* mapped = nullptr; CD3DX12_RANGE noRead(0, 0);
@@ -182,87 +183,115 @@ void InitD3D12(HWND hWnd, UINT width, UINT height) {
 			std::memcpy(mapped, data, bytes);
 			uploadBuf->Unmap(0, nullptr);
 
-			// copy + barrier
+			// COMMON -> COPY_DEST
+			auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(
+				defaultBuf.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+			cmd->ResourceBarrier(1, &toCopy);
+
+			// Copy
 			cmd->CopyBufferRegion(defaultBuf.Get(), 0, uploadBuf.Get(), 0, bytes);
-			auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+
+			// COPY_DEST -> finalState (VB/IB)
+			auto toFinal = CD3DX12_RESOURCE_BARRIER::Transition(
 				defaultBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, finalState);
-			cmd->ResourceBarrier(1, &barrier);
+			cmd->ResourceBarrier(1, &toFinal);
 		};
 
+	// === 2) Открываем upload-список ОДИН РАЗ под всё копирование (VB/IB + текстура) ===
 	HR(g_uploadAlloc->Reset());
 	HR(g_uploadList->Reset(g_uploadAlloc.Get(), nullptr));
 
-	// VB/IB
+	// ---- VB/IB ----
 	ComPtr<ID3D12Resource> vbUpload, ibUpload;
 	CreateDefaultBuffer(g_uploadList.Get(),
 		kVertices, sizeof(kVertices),
 		g_vb, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+
 	CreateDefaultBuffer(g_uploadList.Get(),
 		kIndices, sizeof(kIndices),
 		g_ib, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
 
-	auto img = LoadTextureFile(L"assets\\textures\\negrosuke.png"); // crate.png положи в textures/
-	auto& meta = img.GetMetadata();
+	ScratchImage img = LoadTextureFile(L"assets\\textures\\negrosuke.png"); // твоя функция
+	const TexMetadata& meta = img.GetMetadata();
 
-	// ресурс текстуры (DEFAULT)
+	// ресурс текстуры (DEFAULT) — старт из COMMON
 	ComPtr<ID3D12Resource> texResource;
-	CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
-	auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(
-		meta.format, meta.width, (UINT)meta.height,
-		(UINT16)meta.arraySize, (UINT16)meta.mipLevels);
+	{
+		CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
+		auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+			meta.format, meta.width, (UINT)meta.height,
+			(UINT16)meta.arraySize, (UINT16)meta.mipLevels);
 
-	HR(g_device->CreateCommittedResource(
-		&heapDefault, D3D12_HEAP_FLAG_NONE,
-		&texDesc, D3D12_RESOURCE_STATE_COPY_DEST,
-		nullptr, IID_PPV_ARGS(&texResource)));
+		HR(g_device->CreateCommittedResource(
+			&heapDefault, D3D12_HEAP_FLAG_NONE,
+			&texDesc, D3D12_RESOURCE_STATE_COMMON,
+			nullptr, IID_PPV_ARGS(&texResource)));
+	}
 
-	UINT64 uploadSize = 0;
-	g_device->GetCopyableFootprints(&texDesc, 0, (UINT)meta.mipLevels, 0, nullptr, nullptr, nullptr, &uploadSize);
-
+	// upload ресурс под все мипы
 	ComPtr<ID3D12Resource> texUpload;
-	CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
-	auto upDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
-	HR(g_device->CreateCommittedResource(
-		&heapUpload, D3D12_HEAP_FLAG_NONE,
-		&upDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr, IID_PPV_ARGS(&texUpload)));
+	{
+		UINT64 uploadSize = GetRequiredIntermediateSize(texResource.Get(), 0, (UINT)img.GetImageCount());
+		CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
+		auto upDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
+		HR(g_device->CreateCommittedResource(
+			&heapUpload, D3D12_HEAP_FLAG_NONE,
+			&upDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr, IID_PPV_ARGS(&texUpload)));
+	}
 
-	std::vector<D3D12_SUBRESOURCE_DATA> subresources;
-	PrepareUpload(g_device.Get(), img.GetImages(), img.GetImageCount(), meta, subresources);
+	// COMMON -> COPY_DEST (до UpdateSubresources)
+	{
+		auto toCopyTex = CD3DX12_RESOURCE_BARRIER::Transition(
+			texResource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+		g_uploadList->ResourceBarrier(1, &toCopyTex);
+	}
 
-	UpdateSubresources(g_uploadList.Get(), texResource.Get(), texUpload.Get(),
-		0, 0, (UINT)subresources.size(), subresources.data());
+	// формируем подресурсы и копируем
+	{
+		std::vector<D3D12_SUBRESOURCE_DATA> subs;
+		PrepareUpload(g_device.Get(), img.GetImages(), img.GetImageCount(), meta, subs);
 
-	auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
-		texResource.Get(),
-		D3D12_RESOURCE_STATE_COPY_DEST,
-		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-	g_uploadList->ResourceBarrier(1, &toSRV);
+		UpdateSubresources(g_uploadList.Get(), texResource.Get(), texUpload.Get(),
+			0, 0, (UINT)subs.size(), subs.data());
+	}
 
-	// закрыть + выполнить + дождаться
+	// COPY_DEST -> PIXEL_SHADER_RESOURCE
+	{
+		auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
+			texResource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		g_uploadList->ResourceBarrier(1, &toSRV);
+	}
+
+	// закрываем upload‑список, выполняем и ждём
 	HR(g_uploadList->Close());
 	{
 		ID3D12CommandList* lists[] = { g_uploadList.Get() };
 		g_cmdQueue->ExecuteCommandLists(1, lists);
 	}
-	WaitForGPU(); // теперь все данные на месте
+	WaitForGPU();
 
+	// === 4) создаём SRV (t0) в g_srvHeap ===
 	D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
 	sd.Format = meta.format;
 	sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	sd.Texture2D.MipLevels = (UINT)meta.mipLevels;
+
 	auto cpu = g_srvHeap->GetCPUDescriptorHandleForHeapStart();
 	g_device->CreateShaderResourceView(texResource.Get(), &sd, cpu);
 
-	// Описатели буферов для IA
+	// (если хочешь хранить текстуру глобально)
+	g_tex = texResource;
+
+	// === 5) IA views для рендера ===
 	g_vbv.BufferLocation = g_vb->GetGPUVirtualAddress();
 	g_vbv.StrideInBytes = sizeof(Vertex);
 	g_vbv.SizeInBytes = (UINT)sizeof(kVertices);
 
 	g_ibv.BufferLocation = g_ib->GetGPUVirtualAddress();
-	g_ibv.SizeInBytes = (UINT)sizeof(kIndices);
 	g_ibv.Format = DXGI_FORMAT_R16_UINT;
+	g_ibv.SizeInBytes = (UINT)sizeof(kIndices);
 
 	// Descriptor range для SRV (t0..t0)
 	D3D12_DESCRIPTOR_RANGE range{};
@@ -396,7 +425,7 @@ void RenderFrame()
 	g_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	g_cmdList->IASetVertexBuffers(0, 1, &g_vbv);
 	g_cmdList->IASetIndexBuffer(&g_ibv);
-	
+
 	g_cmdList->DrawIndexedInstanced(g_indexCount, 1, 0, 0, 0);
 
 	auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -452,6 +481,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
 	const wchar_t* kClassName = L"BitchEngine";
 	wchar_t window_name[25] = L"bitchengine FPS: ";
 
+	CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
 	WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc);
 	wc.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
 	wc.lpfnWndProc = WndProc;
@@ -482,6 +513,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
 	double accTitle = 0.0;
 	int frameCounter = 0;
 	double fpsShown = 0.0;
+
+	CoUninitialize();
 
 	MSG msg{};
 	for (;;) {

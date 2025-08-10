@@ -11,5 +11,5 @@ struct PSIn
 float4 main(PSIn i) : SV_Target
 {
     float4 texColor = tex0.Sample(sam0, i.uv);
-    return texColor * float4(i.col, 1);
+    return texColor;
 }
