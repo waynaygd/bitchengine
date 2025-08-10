@@ -13,7 +13,11 @@
 #include <vector>
 #include <comdef.h>
 #include <DirectXMath.h>
+#include <algorithm>
+
 #include "camera.h"
+#include "textures.h"
+#include "obj_loader.h"
 
 //externals
 #include <d3dx12.h>
@@ -61,6 +65,7 @@ UINT g_indexCount = 0;
 ComPtr<ID3D12RootSignature> g_rootSig;
 ComPtr<ID3D12PipelineState> g_pso;
 
+
 struct alignas(256) VSConstants {
     XMFLOAT4X4 mvp;
 };
@@ -82,6 +87,8 @@ bool g_mouseLook = false;
 POINT g_lastMouse = { 0, 0 };
 bool g_mouseHasPrev = false;
 
+// models
+MeshGPU g_meshOBJ; // глобально
 
 void InitD3D12(HWND hWnd, UINT width, UINT height);
 void RenderFrame();
