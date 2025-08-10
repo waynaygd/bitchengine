@@ -398,14 +398,7 @@ void RenderFrame()
 	s_prev = now;
 
 	// скорость (Shift ускоряет)
-	float speed = g_cam.moveSpeed * ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 4.0f : 1.0f);
-	if (GetAsyncKeyState('W') & 0x8000) g_cam.Walk(+speed * dt);
-	if (GetAsyncKeyState('S') & 0x8000) g_cam.Walk(-speed * dt);
-	if (GetAsyncKeyState('D') & 0x8000) g_cam.Strafe(+speed * dt);
-	if (GetAsyncKeyState('A') & 0x8000) g_cam.Strafe(-speed * dt);
-	if (GetAsyncKeyState('Q') & 0x8000) g_cam.UpDown(-speed * dt);
-	if (GetAsyncKeyState('E') & 0x8000) g_cam.UpDown(+speed * dt);
-
+	UpdateInput(dt);
 	g_cam.UpdateView();
 
 	XMMATRIX M = XMMatrixRotationY(g_angle) * XMMatrixRotationX(g_angle * 0.5f);
@@ -471,9 +464,23 @@ void WaitForGPU() {
 	WaitForSingleObject(g_fenceEvent, INFINITE);
 }
 
+void UpdateInput(float dt)
+{
+	if (!g_appActive) return;
+
+	float speed = g_cam.moveSpeed * ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 4.0f : 1.0f);
+	if (GetAsyncKeyState('W') & 0x8000) g_cam.Walk(+speed * dt);
+	if (GetAsyncKeyState('S') & 0x8000) g_cam.Walk(-speed * dt);
+	if (GetAsyncKeyState('D') & 0x8000) g_cam.Strafe(+speed * dt);
+	if (GetAsyncKeyState('A') & 0x8000) g_cam.Strafe(-speed * dt);
+	if (GetAsyncKeyState('Q') & 0x8000) g_cam.UpDown(-speed * dt);
+	if (GetAsyncKeyState('E') & 0x8000) g_cam.UpDown(+speed * dt);
+}
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	switch (msg) {
 	case WM_DESTROY: PostQuitMessage(0); return 0;
+
 	case WM_KEYDOWN:
 		if (wParam == VK_ESCAPE) { DestroyWindow(hWnd); }
 		break;
@@ -483,6 +490,37 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			g_cam.SetLens(g_cam.fovY, float(w) / float(h), g_cam.zn, g_cam.zf);
 		}
 		break;
+	case WM_ACTIVATE:
+	{
+		const WORD code = LOWORD(wParam);
+		if (code == WA_INACTIVE) {
+			g_appActive = false;
+			g_mouseLook = false;
+			ReleaseCapture();
+			ClipCursor(nullptr);
+			ShowCursor(TRUE);
+			g_mouseHasPrev = false; // чтобы не было рывка при возврате
+		}
+		else {
+			g_appActive = true;
+			// курсор показываем; захватывать начнём только по ЛКМ
+			ShowCursor(TRUE);
+		}
+		return 0;
+	}
+	case WM_SETFOCUS:
+		g_appActive = true;
+		return 0;
+
+	case WM_KILLFOCUS:
+		g_appActive = false;
+		g_mouseLook = false;
+		ReleaseCapture();
+		ClipCursor(nullptr);
+		ShowCursor(TRUE);
+		g_mouseHasPrev = false;
+		return 0;
+
 	case WM_LBUTTONDOWN:
 		g_mouseLook = true;
 		SetCapture(hWnd);

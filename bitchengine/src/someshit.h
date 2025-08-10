@@ -87,12 +87,16 @@ bool g_mouseLook = false;
 POINT g_lastMouse = { 0, 0 };
 bool g_mouseHasPrev = false;
 
+bool g_appActive = false;   // есть ли фокус у нашего окна
+
 // models
 MeshGPU g_meshOBJ; // глобально
 
 void InitD3D12(HWND hWnd, UINT width, UINT height);
 void RenderFrame();
 void WaitForGPU();
+
+void UpdateInput(float dt);
 
 inline void ThrowIfFailed(HRESULT hr, const char* expr, const char* file, int line) {
     if (FAILED(hr)) {
