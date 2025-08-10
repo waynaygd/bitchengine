@@ -18,15 +18,15 @@
     <ClCompile Include="bitchengine.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
-    <ClCompile Include="src\bitchengine.cpp">
+    <ClCompile Include="src\main.cpp">
       <Filter>Файлы ресурсов</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="someshit.h">
+    <ClInclude Include="src\someshit.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
-    <ClInclude Include="d3dx12.h">
+    <ClInclude Include="external\d3dx12.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>
