@@ -56,7 +56,9 @@ bool g_mouseHasPrev = false;
 
 bool g_appActive = false;   // есть ли фокус у нашего окна
 
-// models
-MeshGPU g_meshOBJ; // глобально
-
 std::vector<ComPtr<ID3D12Resource>> g_uploadKeepAlive;
+
+UINT g_srvInc = 0;
+std::vector<TextureGPU> g_textures;
+std::vector<MeshGPU>    g_meshes;
+std::vector<Entity>     g_entities;

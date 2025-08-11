@@ -15,8 +15,8 @@ void RenderFrame()
 		g_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
 		g_frameIndex, g_rtvInc);
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv = g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
-	g_cmdList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 
+	g_cmdList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 	g_cmdList->RSSetViewports(1, &g_viewport);
 	g_cmdList->RSSetScissorRects(1, &g_scissor);
 
@@ -24,40 +24,49 @@ void RenderFrame()
 	g_cmdList->ClearRenderTargetView(rtv, clear, 0, nullptr);
 	g_cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-	// delta time
-	static LARGE_INTEGER s_freq = []() { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
-	static LARGE_INTEGER s_prev = []() { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t; }();
+	// dt + ввод
+	static LARGE_INTEGER s_freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
+	static LARGE_INTEGER s_prev = [] { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t; }();
 	LARGE_INTEGER now; QueryPerformanceCounter(&now);
 	float dt = float(double(now.QuadPart - s_prev.QuadPart) / double(s_freq.QuadPart));
 	s_prev = now;
-
-	// скорость (Shift ускоряет)
 	UpdateInput(dt);
 	g_cam.UpdateView();
 
-	XMMATRIX M = XMMatrixRotationY(g_angle) * XMMatrixRotationX(g_angle * 0.5f);
-	XMMATRIX V = g_cam.View();
-	XMMATRIX P = g_cam.Proj();
-
-	XMMATRIX MVP = XMMatrixTranspose(M * V * P);
-	VSConstants c{};
-	XMStoreFloat4x4(&c.mvp, MVP);
-	std::memcpy(g_cbPtr, &c, sizeof(c));
-
-
+	// ВАЖНО: сначала RS, затем привязка shader-visible heaps
 	g_cmdList->SetGraphicsRootSignature(g_rootSig.Get());
+
+	ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get() };           // ← ДОБАВЛЕНО
+	g_cmdList->SetDescriptorHeaps(1, heaps);                       // ← ДОБАВЛЕНО
+
 	g_cmdList->SetPipelineState(g_pso.Get());
-	g_cmdList->SetGraphicsRootConstantBufferView(0, g_cb->GetGPUVirtualAddress());
-
-	ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get() };
-	g_cmdList->SetDescriptorHeaps(1, heaps);
-	g_cmdList->SetGraphicsRootDescriptorTable(1, g_srvHeap->GetGPUDescriptorHandleForHeapStart());
-
 	g_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	g_cmdList->IASetVertexBuffers(0, 1, &g_meshOBJ.vbv);
-	g_cmdList->IASetIndexBuffer(&g_meshOBJ.ibv);
-	g_cmdList->DrawIndexedInstanced(g_meshOBJ.indexCount, 1, 0, 0, 0);
 
+	for (const Entity& e : g_entities)
+	{
+		const MeshGPU& m = g_meshes[e.meshId];
+		const TextureGPU& t = g_textures[e.texId];
+
+		// World → MVP
+		XMMATRIX S = XMMatrixScaling(e.scale.x, e.scale.y, e.scale.z);
+		XMMATRIX Rx = XMMatrixRotationX(XMConvertToRadians(e.rotDeg.x));
+		XMMATRIX Ry = XMMatrixRotationY(XMConvertToRadians(e.rotDeg.y));
+		XMMATRIX Rz = XMMatrixRotationZ(XMConvertToRadians(e.rotDeg.z));
+		XMMATRIX T = XMMatrixTranslation(e.pos.x, e.pos.y, e.pos.z);
+		XMMATRIX M = S * Rx * Ry * Rz * T;
+		XMMATRIX MVP = XMMatrixTranspose(M * g_cam.View() * g_cam.Proj());
+
+		VSConstants c{}; XMStoreFloat4x4(&c.mvp, MVP);
+		std::memcpy(g_cbPtr, &c, sizeof(c));
+		g_cmdList->SetGraphicsRootConstantBufferView(0, g_cb->GetGPUVirtualAddress());
+
+		// Текстура t0: используем именно дескриптор этой текстуры
+		g_cmdList->SetGraphicsRootDescriptorTable(1, t.gpu);
+
+		g_cmdList->IASetVertexBuffers(0, 1, &m.vbv);
+		g_cmdList->IASetIndexBuffer(&m.ibv);
+		g_cmdList->DrawIndexedInstanced(m.indexCount, 1, 0, 0, 0);
+	}
 
 	auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
 		g_backBuffers[g_frameIndex].Get(),
@@ -66,7 +75,6 @@ void RenderFrame()
 
 	HR(g_cmdList->Close());
 
-	// submit + present + sync
 	ID3D12CommandList* lists[] = { g_cmdList.Get() };
 	g_cmdQueue->ExecuteCommandLists(1, lists);
 	HR(g_swapChain->Present(1, 0));
@@ -79,6 +87,7 @@ void RenderFrame()
 	}
 	g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
 }
+
 
 void WaitForGPU() {
 	if (!g_fence || !g_cmdQueue) return;

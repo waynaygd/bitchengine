@@ -3,9 +3,8 @@
 #include "tiny_obj_loader.h"   // только здесь!
 
 #include "obj_loader.h"
-#include "gpu_upload.h"        // твой CreateDefaultBuffer helper
-#include <unordered_map>
-#include <windows.h>
+#include "d3d_init.h"
+#include <gpu_upload.h>
 
 static std::string Narrow(const std::wstring& w) {
     int len = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -132,3 +131,24 @@ bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12Graphic
     out.indexCount = (UINT)indices32.size();
     return true;
 }
+
+UINT RegisterOBJ(const std::wstring& path)
+{
+    MeshGPU m{};
+    DX_BeginUpload();
+    if (!LoadOBJToGPU(path.c_str(), g_device.Get(), g_uploadList.Get(), m)) {
+        DX_EndUploadAndFlush();
+        throw std::runtime_error("OBJ load failed");
+    }
+    DX_EndUploadAndFlush();
+
+    UINT id = (UINT)g_meshes.size();
+    g_meshes.push_back(std::move(m));
+    return id; // meshId
+}
+
+UINT CreateCubeMeshGPU()
+{
+    return 0;
+}
+

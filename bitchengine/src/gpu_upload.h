@@ -8,20 +8,6 @@
 #include <comdef.h>
 #include <d3dx12.h>
 
-inline void ThrowIfFailed(HRESULT hr, const char* expr, const char* file, int line) {
-    if (FAILED(hr)) {
-        _com_error err(hr);
-        std::wstringstream wss;
-        wss << L"D3D12 call failed: " << expr << L"\nHR=0x"
-            << std::hex << hr << L"\n" << err.ErrorMessage()
-            << L"\n" << file << L":" << line;
-        MessageBoxW(nullptr, wss.str().c_str(), L"DX12 Error", MB_ICONERROR);
-        throw std::runtime_error("D3D12 call failed");
-    }
-}
-
-#define HR(x) ThrowIfFailed((x), #x, __FILE__, __LINE__)
-
 inline void CreateDefaultBuffer(
     ID3D12Device* device,
     ID3D12GraphicsCommandList* cmd,

@@ -99,13 +99,16 @@ void DX_CreateDepth(UINT w, UINT h)
     g_device->CreateDepthStencilView(g_depthBuffer.Get(), &dsv, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
 }
 
-void DX_CreateSRVHeap(UINT num)
+void DX_CreateSRVHeap(UINT numDescriptors)
 {
     D3D12_DESCRIPTOR_HEAP_DESC h{};
     h.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    h.NumDescriptors = num;
+    h.NumDescriptors = numDescriptors;            // например 128
     h.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     HR(g_device->CreateDescriptorHeap(&h, IID_PPV_ARGS(&g_srvHeap)));
+
+    g_srvInc = g_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
 void DX_CreateFrameCmdObjects()
@@ -220,96 +223,34 @@ void DX_InitCamera(UINT w, UINT h)
     g_cam.UpdateView();
 }
 
+auto dump = [](UINT id) {
+    const auto& T = g_textures[id];
+    OutputDebugStringW((std::wstring(L"SRV idx=") + std::to_wstring(T.heapIndex) +
+        L" gpu.ptr=" + std::to_wstring(T.gpu.ptr) + L"\n").c_str());
+    };
+
 // ────────────────────────────────────────────────────────────────────────────
 // КРЮЧОК ДЛЯ АССЕТОВ (пока пустой, чтобы проект собрался)
 // ────────────────────────────────────────────────────────────────────────────
 void DX_LoadAssets()
 {
-    // Начинаем upload-процесс
-    HR(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_uploadAlloc)));
-    HR(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_uploadAlloc.Get(), nullptr,
-        IID_PPV_ARGS(&g_uploadList)));
+    // ТЕКСТУРЫ
+    UINT texZagar = RegisterTextureFromFile(L"assets\\textures\\zagarskih_normal.dds");
+    dump(texZagar);
+    UINT texMinecraft = RegisterTextureFromFile(L"assets\\textures\\Mineways2Skfb-RGBA.png");
+    dump(texMinecraft);
 
-    // === 1) Загружаем модель ===
-    if (!LoadOBJToGPU(L"assets\\models\\zagarskih.obj", g_device.Get(), g_uploadList.Get(), g_meshOBJ)) {
-        MessageBoxW(nullptr, L"OBJ load failed", L"Error", MB_OK | MB_ICONERROR);
-    }
+    // МЕШИ
+    UINT meshZagarskih = RegisterOBJ(L"assets\\models\\zagarskih.obj");
+    UINT meshMinecraft = RegisterOBJ(L"assets\\models\\Mineways2Skfb.obj");
 
-    // === 2) Загружаем текстуру ===
-    ScratchImage img = LoadTextureFile(L"assets\\textures\\zagarskih_normal.dds");
-    const TexMetadata& meta = img.GetMetadata();
-
-    // DEFAULT texture
-    {
-        CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
-        auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(
-            meta.format, meta.width, (UINT)meta.height,
-            (UINT16)meta.arraySize, (UINT16)meta.mipLevels);
-
-        HR(g_device->CreateCommittedResource(
-            &heapDefault, D3D12_HEAP_FLAG_NONE,
-            &texDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&g_tex)));
-    }
-
-    // UPLOAD texture
-    ComPtr<ID3D12Resource> texUpload;
-    {
-        UINT64 uploadSize = GetRequiredIntermediateSize(g_tex.Get(), 0, (UINT)img.GetImageCount());
-        CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
-        auto upDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
-
-        HR(g_device->CreateCommittedResource(
-            &heapUpload, D3D12_HEAP_FLAG_NONE,
-            &upDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&texUpload)));
-    }
-
-    // COMMON -> COPY_DEST
-    {
-        auto toCopyTex = CD3DX12_RESOURCE_BARRIER::Transition(
-            g_tex.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-        g_uploadList->ResourceBarrier(1, &toCopyTex);
-    }
-
-    // Копируем пиксели
-    {
-        std::vector<D3D12_SUBRESOURCE_DATA> subs;
-        PrepareUpload(g_device.Get(), img.GetImages(), img.GetImageCount(), meta, subs);
-
-        UpdateSubresources(g_uploadList.Get(), g_tex.Get(), texUpload.Get(),
-            0, 0, (UINT)subs.size(), subs.data());
-    }
-
-    // COPY_DEST -> PIXEL_SHADER_RESOURCE
-    {
-        auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
-            g_tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        g_uploadList->ResourceBarrier(1, &toSRV);
-    }
-
-    // === Закрываем upload-командный список и выполняем ===
-    HR(g_uploadList->Close());
-    {
-        ID3D12CommandList* lists[] = { g_uploadList.Get() };
-        g_cmdQueue->ExecuteCommandLists(1, lists);
-    }
-    WaitForGPU();
-
-    // === 3) Создаём SRV для текстуры ===
-    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-    sd.Format = meta.format;
-    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sd.Texture2D.MipLevels = (UINT)meta.mipLevels;
-
-    auto cpu = g_srvHeap->GetCPUDescriptorHandleForHeapStart();
-    g_device->CreateShaderResourceView(g_tex.Get(), &sd, cpu);
-
-    // Убираем временные ресурсы из памяти после завершения
-    g_uploadAlloc.Reset();
-    g_uploadList.Reset();
+    // СЦЕНА
+    Scene_AddEntity(meshZagarskih, texZagar, { 0,0,0 }, { 0,0,0 }, { 1,1,1 });
+    Scene_AddEntity(meshMinecraft, texMinecraft, { 2,0,0 }, { 0,30,0 }, { 1,1,1 });
+    // Scene_AddEntity(meshCube, texCrate, {-2,0,0}, {0,0,0}, {1,1,1});
 }
+
+
 
 void CreateCB()
 {
@@ -333,12 +274,12 @@ void InitD3D12(HWND hWnd, UINT w, UINT h)
     DX_CreateSwapchain(hWnd, w, h);
     DX_CreateRTVs();
     DX_CreateDepth(w, h);
-    DX_CreateSRVHeap(1);
+    DX_CreateSRVHeap(128);
     DX_CreateFrameCmdObjects();
 
-    CreateCB(); // твоя функция (делает g_cb / g_cbPtr)
+    CreateCB();
 
-    DX_LoadAssets();         // пока пусто — потом добавим UploadOBJ/Texture
+    DX_LoadAssets();    
     DX_CreateRootSigAndPSO();
     DX_InitCamera(w, h);
 }

@@ -89,8 +89,34 @@ extern bool g_mouseHasPrev;
 
 extern bool g_appActive;   // есть ли фокус у нашего окна
 
-// models
-extern MeshGPU g_meshOBJ; // глобально
+// --- текстуры ---
+struct TextureGPU {
+    ComPtr<ID3D12Resource> res;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    UINT heapIndex = UINT(-1);
+};
+
+extern UINT g_srvInc;                     // increment SRV heap
+extern std::vector<TextureGPU> g_textures;
+
+extern std::vector<MeshGPU> g_meshes;
+
+// --- сущности сцены ---
+struct Entity {
+    UINT meshId = 0;
+    UINT texId = 0;
+    DirectX::XMFLOAT3 pos{ 0,0,0 };
+    DirectX::XMFLOAT3 rotDeg{ 0,0,0 }; // pitch,yaw,roll в градусах
+    DirectX::XMFLOAT3 scale{ 1,1,1 };
+};
+extern std::vector<Entity> g_entities;
+
+// регистраторы
+UINT RegisterTextureFromFile(const std::wstring& path); // возвращает texId
+UINT RegisterOBJ(const std::wstring& path);             // возвращает meshId
+UINT CreateCubeMeshGPU();                                // meshId для примитива
+
 
 void InitD3D12(HWND hWnd, UINT width, UINT height);
 void RenderFrame();
@@ -110,11 +136,25 @@ inline void ThrowIfFailed(HRESULT hr, const char* expr, const char* file, int li
     }
 }
 
+inline UINT Scene_AddEntity(UINT meshId, UINT texId,
+    XMFLOAT3 pos = { 0,0,0 }, XMFLOAT3 rotDeg = { 0,0,0 }, XMFLOAT3 scale = { 1,1,1 })
+{
+    Entity e; e.meshId = meshId; e.texId = texId; e.pos = pos; e.rotDeg = rotDeg; e.scale = scale;
+    g_entities.push_back(e);
+    return (UINT)g_entities.size() - 1;
+}
+
+
 #define HR(x) ThrowIfFailed((x), #x, __FILE__, __LINE__)
 
 Microsoft::WRL::ComPtr<ID3DBlob> CompileShaderFromFile(
     const std::wstring& path,
     const char* entry,
     const char* target);
+
+bool LoadOBJToGPU(const std::wstring& path,
+    ID3D12Device* device,
+    ID3D12GraphicsCommandList* cmd,
+    MeshGPU& outMesh);
 
 ScratchImage LoadTextureFile(const std::wstring& filename);
