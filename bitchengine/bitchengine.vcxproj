@@ -139,14 +139,18 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\d3d_init.cpp" />
+    <ClCompile Include="src\globals.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\obj_loader.cpp" />
+    <ClCompile Include="src\shaders_util.cpp" />
     <ClCompile Include="src\textures.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="external\d3dx12.h" />
     <ClInclude Include="external\tiny_obj_loader.h" />
     <ClInclude Include="src\camera.h" />
+    <ClInclude Include="src\d3d_init.h" />
     <ClInclude Include="src\gpu_upload.h" />
     <ClInclude Include="src\mesh.h" />
     <ClInclude Include="src\obj_loader.h" />

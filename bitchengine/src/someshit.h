@@ -26,71 +26,71 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
-static const UINT kFrameCount = 2;
+inline constexpr UINT kFrameCount = 2;
 
-HWND g_hWnd = nullptr;
-ComPtr<IDXGIFactory7>        g_factory;
-ComPtr<ID3D12Device>         g_device;
-ComPtr<ID3D12CommandQueue>   g_cmdQueue;
-ComPtr<IDXGISwapChain3>      g_swapChain;
-ComPtr<ID3D12DescriptorHeap> g_rtvHeap;
-UINT                         g_rtvInc = 0;
-ComPtr<ID3D12Resource>       g_backBuffers[kFrameCount];
-ComPtr<ID3D12CommandAllocator> g_alloc[kFrameCount];
-ComPtr<ID3D12GraphicsCommandList> g_cmdList;
+extern HWND g_hWnd;
+extern ComPtr<IDXGIFactory7>        g_factory;
+extern ComPtr<ID3D12Device>         g_device;
+extern ComPtr<ID3D12CommandQueue>   g_cmdQueue;
+extern ComPtr<IDXGISwapChain3>      g_swapChain;
+extern ComPtr<ID3D12DescriptorHeap> g_rtvHeap;
+extern UINT                         g_rtvInc;
+extern ComPtr<ID3D12Resource>       g_backBuffers[kFrameCount];
+extern ComPtr<ID3D12CommandAllocator> g_alloc[kFrameCount];
+extern ComPtr<ID3D12GraphicsCommandList> g_cmdList;
 
-ComPtr<ID3D12Fence>          g_fence;
-HANDLE                       g_fenceEvent = nullptr;
-UINT64                       g_fenceValue = 0;
-UINT                         g_frameIndex = 0;
+extern ComPtr<ID3D12Fence>          g_fence;
+extern HANDLE                       g_fenceEvent;
+extern UINT64                       g_fenceValue;
+extern UINT                         g_frameIndex;
 
-ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
-ComPtr<ID3D12Resource>       g_depthBuffer;
-DXGI_FORMAT g_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-DXGI_FORMAT g_depthFormat = DXGI_FORMAT_D32_FLOAT;
-D3D12_VIEWPORT g_viewport;
-D3D12_RECT     g_scissor;
+extern ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
+extern ComPtr<ID3D12Resource>       g_depthBuffer;
+extern DXGI_FORMAT g_backBufferFormat;
+extern DXGI_FORMAT g_depthFormat;
+extern D3D12_VIEWPORT g_viewport;
+extern D3D12_RECT     g_scissor;
 
-ComPtr<ID3D12DescriptorHeap> g_srvHeap;
-ComPtr<ID3D12Resource> g_tex;
+extern ComPtr<ID3D12DescriptorHeap> g_srvHeap;
+extern ComPtr<ID3D12Resource> g_tex;
 
-ComPtr<ID3D12CommandAllocator>     g_uploadAlloc;
-ComPtr<ID3D12GraphicsCommandList>  g_uploadList;
+extern ComPtr<ID3D12CommandAllocator>     g_uploadAlloc;
+extern ComPtr<ID3D12GraphicsCommandList>  g_uploadList;
 
-ComPtr<ID3D12Resource> g_vb, g_ib;
-D3D12_VERTEX_BUFFER_VIEW g_vbv{};
-D3D12_INDEX_BUFFER_VIEW  g_ibv{};
-UINT g_indexCount = 0;
+extern ComPtr<ID3D12Resource> g_vb, g_ib;
+extern D3D12_VERTEX_BUFFER_VIEW g_vbv;
+extern D3D12_INDEX_BUFFER_VIEW  g_ibv;
+extern UINT g_indexCount;
 
-ComPtr<ID3D12RootSignature> g_rootSig;
-ComPtr<ID3D12PipelineState> g_pso;
+extern ComPtr<ID3D12RootSignature> g_rootSig;
+extern ComPtr<ID3D12PipelineState> g_pso;
 
 
 struct alignas(256) VSConstants {
     XMFLOAT4X4 mvp;
 };
 
-ComPtr<ID3D12Resource> g_cb;     // upload-ресурс под CB
-uint8_t* g_cbPtr = nullptr; // мапнутый указатель
-float                  g_angle = 0.0f;    // для вращения
+extern ComPtr<ID3D12Resource> g_cb;     // upload-ресурс под CB
+extern uint8_t* g_cbPtr; // мапнутый указатель
+extern float                  g_angle;    // для вращения
 
 // Камера/проекция (храним отдельно, чтобы не пересчитывать каждый кадр)
-XMFLOAT4X4 g_view, g_proj;
-Camera g_cam;
+extern XMFLOAT4X4 g_view, g_proj;
+extern Camera g_cam;
 
-XMFLOAT3 g_camPos = { 0.0f, 0.0f, -5.0f };
-float g_yaw = 0.0f;   // вращение по оси Y
-float g_pitch = 0.0f; // вращение по оси X
+extern XMFLOAT3 g_camPos;
+extern float g_yaw;   // вращение по оси Y
+extern float g_pitch; // вращение по оси X
 
 // Настройки
-bool g_mouseLook = false;
-POINT g_lastMouse = { 0, 0 };
-bool g_mouseHasPrev = false;
+extern bool g_mouseLook;
+extern POINT g_lastMouse;
+extern bool g_mouseHasPrev;
 
-bool g_appActive = false;   // есть ли фокус у нашего окна
+extern bool g_appActive;   // есть ли фокус у нашего окна
 
 // models
-MeshGPU g_meshOBJ; // глобально
+extern MeshGPU g_meshOBJ; // глобально
 
 void InitD3D12(HWND hWnd, UINT width, UINT height);
 void RenderFrame();
@@ -112,25 +112,9 @@ inline void ThrowIfFailed(HRESULT hr, const char* expr, const char* file, int li
 
 #define HR(x) ThrowIfFailed((x), #x, __FILE__, __LINE__)
 
-auto CompileShaderFromFile = [](const std::wstring& path,
+Microsoft::WRL::ComPtr<ID3DBlob> CompileShaderFromFile(
+    const std::wstring& path,
     const char* entry,
-    const char* target) -> ComPtr<ID3DBlob>
-    {
-        ComPtr<ID3DBlob> shader, error;
-        HRESULT hr = D3DCompileFromFile(
-            path.c_str(),
-            nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
-            entry, target,
-            D3DCOMPILE_ENABLE_STRICTNESS, 0,
-            &shader, &error
-        );
-        if (FAILED(hr))
-        {
-            if (error)
-                OutputDebugStringA((char*)error->GetBufferPointer());
-            throw std::runtime_error("Shader compilation failed");
-        }
-        return shader;
-    };
+    const char* target);
 
 ScratchImage LoadTextureFile(const std::wstring& filename);
