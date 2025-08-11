@@ -1,6 +1,6 @@
-// obj_loader.cpp
+п»ї// obj_loader.cpp
 #define TINYOBJLOADER_IMPLEMENTATION
-#include "tiny_obj_loader.h"   // только здесь!
+#include "tiny_obj_loader.h"   // С‚РѕР»СЊРєРѕ Р·РґРµСЃСЊ!
 
 #include "obj_loader.h"
 #include "d3d_init.h"
@@ -15,9 +15,9 @@ static std::string Narrow(const std::wstring& w) {
 
 bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmd, MeshGPU& out)
 {
-    // 1) tinyobj: читаем и триангулируем
+    // 1) tinyobj: С‡РёС‚Р°РµРј Рё С‚СЂРёР°РЅРіСѓР»РёСЂСѓРµРј
     tinyobj::ObjReaderConfig cfg;
-    cfg.mtl_search_path = ""; // можно задать папку, если будешь тянуть материалы
+    cfg.mtl_search_path = ""; // РјРѕР¶РЅРѕ Р·Р°РґР°С‚СЊ РїР°РїРєСѓ, РµСЃР»Рё Р±СѓРґРµС€СЊ С‚СЏРЅСѓС‚СЊ РјР°С‚РµСЂРёР°Р»С‹
     cfg.triangulate = true;
 
     tinyobj::ObjReader reader;
@@ -32,14 +32,14 @@ bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12Graphic
     const auto& attrib = reader.GetAttrib();
     const auto& shapes = reader.GetShapes();
 
-    // 2) Собираем уникальные вершины по ключу (v, vt, vn)
+    // 2) РЎРѕР±РёСЂР°РµРј СѓРЅРёРєР°Р»СЊРЅС‹Рµ РІРµСЂС€РёРЅС‹ РїРѕ РєР»СЋС‡Сѓ (v, vt, vn)
     std::vector<VertexOBJ>   vertices;
-    std::vector<uint32_t>    indices32; // соберём в 32-bit, потом решим формат
+    std::vector<uint32_t>    indices32; // СЃРѕР±РµСЂС‘Рј РІ 32-bit, РїРѕС‚РѕРј СЂРµС€РёРј С„РѕСЂРјР°С‚
 
     struct Key { int v, vt, vn; };
     struct KeyHash {
         size_t operator()(const Key& k) const noexcept {
-            // простенький hash
+            // РїСЂРѕСЃС‚РµРЅСЊРєРёР№ hash
             return (size_t)k.v * 73856093u ^ (size_t)k.vt * 19349663u ^ (size_t)k.vn * 83492791u;
         }
     };
@@ -58,18 +58,18 @@ bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12Graphic
         if (it != remap.end()) return it->second;
 
         VertexOBJ v{};
-        // position (обязательно есть в obj)
+        // position (РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ РµСЃС‚СЊ РІ obj)
         v.px = attrib.vertices[3 * idx.vertex_index + 0];
         v.py = attrib.vertices[3 * idx.vertex_index + 1];
         v.pz = attrib.vertices[3 * idx.vertex_index + 2];
 
-        // color = белый (если хочешь — парси tinyobj::attrib.colors)
+        // color = Р±РµР»С‹Р№ (РµСЃР»Рё С…РѕС‡РµС€СЊ вЂ” РїР°СЂСЃРё tinyobj::attrib.colors)
         v.r = v.g = v.b = 1.0f;
 
-        // uv (если были)
+        // uv (РµСЃР»Рё Р±С‹Р»Рё)
         if (idx.texcoord_index >= 0 && !attrib.texcoords.empty()) {
             v.u = attrib.texcoords[2 * idx.texcoord_index + 0];
-            v.v = 1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]; // V-флип под D3D
+            v.v = 1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]; // V-С„Р»РёРї РїРѕРґ D3D
         }
         else {
             v.u = v.v = 0.0f;
@@ -87,18 +87,18 @@ bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12Graphic
         }
     }
 
-    // 3) Выбираем формат индексов
+    // 3) Р’С‹Р±РёСЂР°РµРј С„РѕСЂРјР°С‚ РёРЅРґРµРєСЃРѕРІ
     bool use32 = (vertices.size() > 65535);
     out.indexFormat = use32 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;
 
-    // 4) Готовим CPU-буферы
+    // 4) Р“РѕС‚РѕРІРёРј CPU-Р±СѓС„РµСЂС‹
     std::vector<uint16_t> indices16;
     indices16.reserve(indices32.size());
     if (!use32) {
         for (auto i : indices32) indices16.push_back((uint16_t)i);
     }
 
-    // 5) Пишем в GPU (через твой uploadCmd)
+    // 5) РџРёС€РµРј РІ GPU (С‡РµСЂРµР· С‚РІРѕР№ uploadCmd)
     ComPtr<ID3D12Resource> vbUpload, ibUpload;
     CreateDefaultBuffer(device, uploadCmd,
         vertices.data(), vertices.size() * sizeof(VertexOBJ),
@@ -147,8 +147,114 @@ UINT RegisterOBJ(const std::wstring& path)
     return id; // meshId
 }
 
+struct CubeVertex {
+    DirectX::XMFLOAT3 pos;
+    DirectX::XMFLOAT3 col;
+    DirectX::XMFLOAT2 uv;
+};
+
 UINT CreateCubeMeshGPU()
 {
-    return 0;
-}
+    // 24 СѓРЅРёРєР°Р»СЊРЅС‹Рµ РІРµСЂС€РёРЅС‹ (РїРѕ 4 РЅР° РіСЂР°РЅСЊ) СЃ UV
+    static const CubeVertex v[] = {
+        // +Z (front)
+        {{-1,-1, 1},{1,0,0},{0,1}}, {{ 1,-1, 1},{0,1,0},{1,1}},
+        {{ 1, 1, 1},{0,0,1},{1,0}}, {{-1, 1, 1},{1,1,0},{0,0}},
+        // -Z (back)
+        {{ 1,-1,-1},{1,0,1},{0,1}}, {{-1,-1,-1},{0,1,1},{1,1}},
+        {{-1, 1,-1},{1,1,1},{1,0}}, {{ 1, 1,-1},{0.3f,0.3f,0.3f},{0,0}},
+        // +X (right)
+        {{ 1,-1, 1},{1,0,0},{0,1}}, {{ 1,-1,-1},{0,1,0},{1,1}},
+        {{ 1, 1,-1},{0,0,1},{1,0}}, {{ 1, 1, 1},{1,1,0},{0,0}},
+        // -X (left)
+        {{-1,-1,-1},{1,0,1},{0,1}}, {{-1,-1, 1},{0,1,1},{1,1}},
+        {{-1, 1, 1},{1,1,1},{1,0}}, {{-1, 1,-1},{0.3f,0.3f,0.3f},{0,0}},
+        // +Y (top)
+        {{-1, 1, 1},{1,0,0},{0,1}}, {{ 1, 1, 1},{0,1,0},{1,1}},
+        {{ 1, 1,-1},{0,0,1},{1,0}}, {{-1, 1,-1},{1,1,0},{0,0}},
+        // -Y (bottom)
+        {{-1,-1,-1},{1,0,1},{0,1}}, {{ 1,-1,-1},{0,1,1},{1,1}},
+        {{ 1,-1, 1},{1,1,1},{1,0}}, {{-1,-1, 1},{0.3f,0.3f,0.3f},{0,0}},
+    };
 
+    static const uint16_t idx[] = {
+        0,1,2, 0,2,3,     // front
+        4,5,6, 4,6,7,     // back
+        8,9,10, 8,10,11,  // right
+        12,13,14, 12,14,15,// left
+        16,17,18, 16,18,19,// top
+        20,21,22, 20,22,23 // bottom
+    };
+
+    const UINT vbBytes = (UINT)sizeof(v);
+    const UINT ibBytes = (UINT)sizeof(idx);
+
+    // --- СЃРѕР·РґР°С‘Рј DEFAULT+UPLOAD РґР»СЏ VB/IB Рё РєРѕРїРёСЂСѓРµРј РґР°РЅРЅС‹Рµ ---
+    Microsoft::WRL::ComPtr<ID3D12Resource> vb, ib, vbUpload, ibUpload;
+
+    auto CreateDefaultAndUpload = [&](const void* src, UINT bytes,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& defaultBuf,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& uploadBuf,
+        D3D12_RESOURCE_STATES finalState)
+        {
+            // DEFAULT (СЃС‚Р°СЂС‚ РёР· COMMON)
+            CD3DX12_HEAP_PROPERTIES hpDef(D3D12_HEAP_TYPE_DEFAULT);
+            auto desc = CD3DX12_RESOURCE_DESC::Buffer(bytes);
+            HR(g_device->CreateCommittedResource(&hpDef, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                IID_PPV_ARGS(defaultBuf.ReleaseAndGetAddressOf())));
+            // UPLOAD
+            CD3DX12_HEAP_PROPERTIES hpUp(D3D12_HEAP_TYPE_UPLOAD);
+            HR(g_device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                IID_PPV_ARGS(uploadBuf.ReleaseAndGetAddressOf())));
+
+            // map+copy
+            void* mapped = nullptr; CD3DX12_RANGE noRead(0, 0);
+            HR(uploadBuf->Map(0, &noRead, &mapped));
+            std::memcpy(mapped, src, bytes);
+            uploadBuf->Unmap(0, nullptr);
+
+            // Р·Р°РїРёСЃС‹РІР°РµРј РєРѕРјР°РЅРґС‹ РєРѕРїРёСЂРѕРІР°РЅРёСЏ РІ uploadвЂ‘СЃРїРёСЃРѕРє
+            HR(g_uploadAlloc->Reset());
+            HR(g_uploadList->Reset(g_uploadAlloc.Get(), nullptr));
+
+            auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(
+                defaultBuf.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+            g_uploadList->ResourceBarrier(1, &toCopy);
+
+            g_uploadList->CopyBufferRegion(defaultBuf.Get(), 0, uploadBuf.Get(), 0, bytes);
+
+            auto toFinal = CD3DX12_RESOURCE_BARRIER::Transition(
+                defaultBuf.Get(), D3D12_RESOURCE_STATE_COPY_DEST, finalState);
+            g_uploadList->ResourceBarrier(1, &toFinal);
+
+            HR(g_uploadList->Close());
+            ID3D12CommandList* lists[] = { g_uploadList.Get() };
+            g_cmdQueue->ExecuteCommandLists(1, lists);
+            WaitForGPU(); // РїСЂРѕСЃС‚Рѕ Рё РЅР°РґС‘Р¶РЅРѕ
+        };
+
+    CreateDefaultAndUpload(v, vbBytes, vb, vbUpload, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    CreateDefaultAndUpload(idx, ibBytes, ib, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+    // --- Р·Р°РїРѕР»РЅСЏРµРј MeshGPU ---
+    MeshGPU mesh{};
+    mesh.vb = vb;
+    mesh.ib = ib;
+    mesh.indexCount = _countof(idx);
+
+    mesh.vbv.BufferLocation = mesh.vb->GetGPUVirtualAddress();
+    mesh.vbv.StrideInBytes = sizeof(CubeVertex);
+    mesh.vbv.SizeInBytes = vbBytes;
+
+    mesh.ibv.BufferLocation = mesh.ib->GetGPUVirtualAddress();
+    mesh.ibv.Format = DXGI_FORMAT_R16_UINT;
+    mesh.ibv.SizeInBytes = ibBytes;
+
+    // СЂРµРіРёСЃС‚СЂРёСЂСѓРµРј РІ РјР°СЃСЃРёРІРµ РјРµС€РµР№
+    UINT id = (UINT)g_meshes.size();
+    g_meshes.emplace_back(std::move(mesh));
+
+    return id;
+}

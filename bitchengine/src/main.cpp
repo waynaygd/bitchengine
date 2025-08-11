@@ -3,6 +3,7 @@
 
 void RenderFrame()
 {
+	IM_ASSERT(ImGui::GetCurrentContext() != nullptr);
 	HR(g_alloc[g_frameIndex]->Reset());
 	HR(g_cmdList->Reset(g_alloc[g_frameIndex].Get(), g_pso.Get()));
 
@@ -42,31 +43,56 @@ void RenderFrame()
 	g_cmdList->SetPipelineState(g_pso.Get());
 	g_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	for (const Entity& e : g_entities)
+	for (size_t i = 0; i < g_entities.size(); ++i)
 	{
+		const Entity& e = g_entities[i];
 		const MeshGPU& m = g_meshes[e.meshId];
 		const TextureGPU& t = g_textures[e.texId];
 
-		// World → MVP
+		// world
 		XMMATRIX S = XMMatrixScaling(e.scale.x, e.scale.y, e.scale.z);
 		XMMATRIX Rx = XMMatrixRotationX(XMConvertToRadians(e.rotDeg.x));
 		XMMATRIX Ry = XMMatrixRotationY(XMConvertToRadians(e.rotDeg.y));
 		XMMATRIX Rz = XMMatrixRotationZ(XMConvertToRadians(e.rotDeg.z));
 		XMMATRIX T = XMMatrixTranslation(e.pos.x, e.pos.y, e.pos.z);
 		XMMATRIX M = S * Rx * Ry * Rz * T;
-		XMMATRIX MVP = XMMatrixTranspose(M * g_cam.View() * g_cam.Proj());
 
-		VSConstants c{}; XMStoreFloat4x4(&c.mvp, MVP);
-		std::memcpy(g_cbPtr, &c, sizeof(c));
-		g_cmdList->SetGraphicsRootConstantBufferView(0, g_cb->GetGPUVirtualAddress());
+		VSConstants c{};
+		XMStoreFloat4x4(&c.mvp, XMMatrixTranspose(M * g_cam.View() * g_cam.Proj()));
 
-		// Текстура t0: используем именно дескриптор этой текстуры
+		// свой слот в CB (256‑byte aligned)
+		UINT offset = UINT(i) * CB_SIZE_ALIGNED;
+		std::memcpy(g_cbPtr + offset, &c, sizeof(c));
+		g_cmdList->SetGraphicsRootConstantBufferView(0, g_cb->GetGPUVirtualAddress() + offset);
+
+		// текстура
 		g_cmdList->SetGraphicsRootDescriptorTable(1, t.gpu);
 
 		g_cmdList->IASetVertexBuffers(0, 1, &m.vbv);
 		g_cmdList->IASetIndexBuffer(&m.ibv);
 		g_cmdList->DrawIndexedInstanced(m.indexCount, 1, 0, 0, 0);
 	}
+
+
+	// --- ImGui frame begin ---
+	ImGui_ImplWin32_NewFrame();     // платформа
+	ImGui_ImplDX12_NewFrame();      // РЕНДЕРЕР ← обязательно до ImGui::NewFrame()
+	ImGui::NewFrame();
+
+	// твой UI
+	BuildEditorUI();
+
+	ImGui::Render();
+
+	// рендер UI (включаем imgui-heap)
+	ID3D12DescriptorHeap* imguiHeaps[] = { g_imguiHeap.Get() };
+	g_cmdList->SetDescriptorHeaps(1, imguiHeaps);
+	ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmdList.Get());
+
+	// вернуть свою кучу, если нужно
+	ID3D12DescriptorHeap* sceneHeaps[] = { g_srvHeap.Get() };
+	g_cmdList->SetDescriptorHeaps(1, sceneHeaps);
+
 
 	auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
 		g_backBuffers[g_frameIndex].Get(),
@@ -121,18 +147,35 @@ void UpdateInput(float dt)
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+
+	extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+		return 0;
+
 	switch (msg) {
-	case WM_DESTROY: PostQuitMessage(0); return 0;
+	case WM_DESTROY: 
+		DX_Shutdown();
+		PostQuitMessage(0); 
+		return 0;
 
 	case WM_KEYDOWN:
 		if (wParam == VK_ESCAPE) { DestroyWindow(hWnd); }
 		break;
 	case WM_SIZE:
-		if (wParam != SIZE_MINIMIZED) {
-			UINT w = LOWORD(lParam), h = HIWORD(lParam);
-			g_cam.SetLens(g_cam.fovY, float(w) / float(h), g_cam.zn, g_cam.zf);
+	{
+		if (wParam == SIZE_MINIMIZED) return 0;
+		UINT w = LOWORD(lParam), h = HIWORD(lParam);
+		if (w == 0 || h == 0) return 0;
+
+		if (g_dxReady) {
+			DX_Resize(w, h);
 		}
-		break;
+		else {
+			// запомним — применим после InitD3D12
+			g_pendingW = w; g_pendingH = h;
+		}
+		return 0;
+	}
 	case WM_ACTIVATE:
 	{
 		const WORD code = LOWORD(wParam);
@@ -179,6 +222,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		return 0;
 	case WM_MOUSEMOVE:
 	{
+		ImGuiIO& io = ImGui::GetIO();
+		if (io.WantCaptureMouse) break;
+
 		if (g_mouseLook)
 		{
 			POINT p = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };

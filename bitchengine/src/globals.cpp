@@ -57,6 +57,10 @@ bool g_mouseHasPrev = false;
 bool g_appActive = false;   // есть ли фокус у нашего окна
 
 std::vector<ComPtr<ID3D12Resource>> g_uploadKeepAlive;
+ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
+
+bool g_dxReady = false;
+UINT g_pendingW = 0, g_pendingH = 0;
 
 UINT g_srvInc = 0;
 std::vector<TextureGPU> g_textures;

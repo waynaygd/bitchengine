@@ -2,11 +2,118 @@
 #include "d3d_init.h"
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
+#include <imgui/imgui_internal.h>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "DirectXTex.lib")
+
+// ────────────────────────────────────────────────────────────────────────────
+// IMGUI
+// ────────────────────────────────────────────────────────────────────────────
+void InitImGui(HWND hwnd)
+{
+    // 1. Создаём контекст
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+
+    // 2. Стиль
+    ImGui::StyleColorsDark();
+
+    // 3. Инициализация платформы (Win32)
+    ImGui_ImplWin32_Init(hwnd);
+
+    // 4. Инициализация рендерера (DX12)
+    ImGui_ImplDX12_Init(
+        g_device.Get(),
+        kFrameCount,                                 // количество кадров в свопчейне
+        DXGI_FORMAT_R8G8B8A8_UNORM,                 // формат RTV
+        g_imguiHeap.Get(),                          // твоя heap для imgui
+        g_imguiHeap->GetCPUDescriptorHandleForHeapStart(),
+        g_imguiHeap->GetGPUDescriptorHandleForHeapStart()
+    );
+
+    io.Fonts->AddFontDefault();      // на всякий случай добавим дефолтный шрифт
+    bool okBuild = io.Fonts->Build(); // пробуем собрать атлас на CPU
+    IM_ASSERT(okBuild && "Font atlas build failed (STB truetype disabled?)");
+
+    // Загрузим текстуру шрифта в GPU сейчас, чтобы NewFrame не делал этого лениво
+    ImGui_ImplDX12_CreateDeviceObjects();
+}
+
+void DX_CreateImGuiHeap()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+    desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    desc.NumDescriptors = 1;
+    desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    desc.NodeMask = 0;
+    HR(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_imguiHeap)));
+}
+
+void ShutdownImGui()
+{
+    ImGui_ImplDX12_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+}
+
+int g_selectedEntity = -1;
+
+void BuildEditorUI()
+{
+    if (ImGui::Begin("Scene"))
+    {
+        // список сущностей
+        for (int i = 0; i < (int)g_entities.size(); ++i) {
+            std::string label = "Entity " + std::to_string(i);
+            if (ImGui::Selectable(label.c_str(), g_selectedEntity == i))
+                g_selectedEntity = i;
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Add Cube")) {
+            UINT cube = CreateCubeMeshGPU();
+            UINT tex = g_textures.empty() ? 0u : 2u; // назначь первую текстуру или сделай выбор в UI
+            Scene_AddEntity(cube, tex, { 0,0,0 }, { 0,0,0 }, { 1,1,1 });
+        }
+
+        if (g_selectedEntity >= 0 && g_selectedEntity < (int)g_entities.size()) {
+            Entity& e = g_entities[g_selectedEntity];
+            ImGui::Text("Transform");
+            ImGui::DragFloat3("Position", &e.pos.x, 0.01f);
+            ImGui::DragFloat3("Rotation (deg)", &e.rotDeg.x, 0.1f);
+            ImGui::DragFloat3("Scale", &e.scale.x, 0.01f, 0.01f, 100.0f);
+
+            // выбор mesh/texture
+            if (ImGui::TreeNode("Bindings")) {
+                if (ImGui::BeginListBox("Mesh")) {
+                    for (UINT i = 0; i < g_meshes.size(); ++i) {
+                        bool sel = (e.meshId == i);
+                        char buf[32]; sprintf_s(buf, "mesh %u", i);
+                        if (ImGui::Selectable(buf, sel)) e.meshId = i;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndListBox();
+                }
+                if (ImGui::BeginListBox("Texture")) {
+                    for (UINT i = 0; i < g_textures.size(); ++i) {
+                        bool sel = (e.texId == i);
+                        char buf[32]; sprintf_s(buf, "tex %u", i);
+                        if (ImGui::Selectable(buf, sel)) e.texId = i;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndListBox();
+                }
+                ImGui::TreePop();
+            }
+        }
+    }
+    ImGui::End();
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // НИЗКОУРОВНЕВЫЕ ШАГИ
@@ -236,9 +343,8 @@ void DX_LoadAssets()
 {
     // ТЕКСТУРЫ
     UINT texZagar = RegisterTextureFromFile(L"assets\\textures\\zagarskih_normal.dds");
-    dump(texZagar);
     UINT texMinecraft = RegisterTextureFromFile(L"assets\\textures\\Mineways2Skfb-RGBA.png");
-    dump(texMinecraft);
+    UINT texDefault = RegisterTextureFromFile(L"assets\\textures\\default_white.png");
 
     // МЕШИ
     UINT meshZagarskih = RegisterOBJ(L"assets\\models\\zagarskih.obj");
@@ -254,12 +360,15 @@ void DX_LoadAssets()
 
 void CreateCB()
 {
-    const UINT cbSize = (sizeof(VSConstants) + 255) & ~255u;
     CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
-    CD3DX12_RESOURCE_DESC   desc = CD3DX12_RESOURCE_DESC::Buffer(cbSize);
-    HR(g_device->CreateCommittedResource(&heapUpload, D3D12_HEAP_FLAG_NONE,
-        &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&g_cb)));
-    HR(g_cb->Map(0, nullptr, reinterpret_cast<void**>(&g_cbPtr)));
+    CD3DX12_RESOURCE_DESC   desc = CD3DX12_RESOURCE_DESC::Buffer(UINT64(CB_SIZE_ALIGNED) * MAX_OBJECTS);
+
+    HR(g_device->CreateCommittedResource(
+        &heapUpload, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&g_cb)));
+
+    CD3DX12_RANGE range(0, 0);
+    HR(g_cb->Map(0, &range, reinterpret_cast<void**>(&g_cbPtr)));
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -275,6 +384,11 @@ void InitD3D12(HWND hWnd, UINT w, UINT h)
     DX_CreateRTVs();
     DX_CreateDepth(w, h);
     DX_CreateSRVHeap(128);
+
+
+    DX_CreateImGuiHeap();
+    InitImGui(g_hWnd);
+
     DX_CreateFrameCmdObjects();
 
     CreateCB();
@@ -282,4 +396,102 @@ void InitD3D12(HWND hWnd, UINT w, UINT h)
     DX_LoadAssets();    
     DX_CreateRootSigAndPSO();
     DX_InitCamera(w, h);
+
+    g_dxReady = true;
+
+    // если во время CreateWindow пришёл WM_SIZE — применим отложенный ресайз
+    if (g_pendingW && g_pendingH &&
+        (g_pendingW != g_width || g_pendingH != g_height))
+    {
+        DX_Resize(g_pendingW, g_pendingH);
+        g_pendingW = g_pendingH = 0;
+    }
+}
+
+void DX_Resize(UINT w, UINT h)
+{
+    if (!g_device || !g_swapChain) return; // ещё рано
+    if (w == 0 || h == 0) return;
+    if (w == g_width && h == g_height) return;
+
+    g_width = w; g_height = h;
+
+    WaitForGPU();
+
+    // release старые RT
+    for (UINT i = 0; i < kFrameCount; ++i) g_backBuffers[i].Reset();
+    g_rtvHeap.Reset();
+
+    // resize swapchain
+    HR(g_swapChain->ResizeBuffers(kFrameCount, w, h, g_backBufferFormat, 0));
+    g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
+
+    // создать RTV heap и RTV
+    D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{};
+    rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvDesc.NumDescriptors = kFrameCount;
+    HR(g_device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&g_rtvHeap)));
+    g_rtvInc = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvStart(g_rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        HR(g_swapChain->GetBuffer(i, IID_PPV_ARGS(&g_backBuffers[i])));
+        CD3DX12_CPU_DESCRIPTOR_HANDLE h(rtvStart, i, g_rtvInc);
+        g_device->CreateRenderTargetView(g_backBuffers[i].Get(), nullptr, h);
+    }
+
+    // depth заново
+    g_depthBuffer.Reset();
+    D3D12_CLEAR_VALUE clear{}; clear.Format = g_depthFormat; clear.DepthStencil.Depth = 1.0f;
+    auto depthDesc = CD3DX12_RESOURCE_DESC::Tex2D(g_depthFormat, w, h, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    CD3DX12_HEAP_PROPERTIES hp(D3D12_HEAP_TYPE_DEFAULT);
+    HR(g_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &depthDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&g_depthBuffer)));
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{}; dsv.Format = g_depthFormat; dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    g_device->CreateDepthStencilView(g_depthBuffer.Get(), &dsv, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // viewport / scissor / камера
+    g_viewport = { 0.f, 0.f, float(w), float(h), 0.f, 1.f };
+    g_scissor = { 0, 0, (LONG)w, (LONG)h };
+    g_cam.SetLens(g_cam.fovY, float(w) / float(h), g_cam.zn, g_cam.zf);
+}
+
+
+void DX_Shutdown()
+{
+    WaitForGPU();
+
+    // 1) ImGui
+    ShutdownImGui();                // ImGui_ImplDX12_Shutdown/Win32_Shutdown + DestroyContext
+    g_imguiHeap.Reset();
+
+    // 2) сцена/ресурсы
+    g_cb.Reset();
+    g_tex.Reset();
+    for (auto& m : g_meshes) { /* если есть отдельные ресурсы — Reset */ }
+    g_meshes.clear(); g_textures.clear(); g_entities.clear();
+
+    // 3) свопчейн/RTV/DSV/командные объекты
+    for (auto& bb : g_backBuffers) bb.Reset();
+    g_depthBuffer.Reset();
+    g_rtvHeap.Reset();
+    g_dsvHeap.Reset();
+    g_srvHeap.Reset();
+
+    g_cmdList.Reset();
+    for (auto& a : g_alloc) a.Reset();
+    g_uploadList.Reset();
+    g_uploadAlloc.Reset();
+
+    // 4) синхронизация/очередь/девайс
+    if (g_fenceEvent) { CloseHandle(g_fenceEvent); g_fenceEvent = nullptr; }
+    g_fence.Reset();
+    g_cmdQueue.Reset();
+    g_swapChain.Reset();
+    g_device.Reset();
+
+#if defined(_DEBUG)
+    if (ComPtr<ID3D12Debug> dbg; SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg))))
+        dbg->EnableDebugLayer();
+#endif
 }

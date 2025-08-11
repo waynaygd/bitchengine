@@ -1,6 +1,14 @@
 ﻿// d3d_init.h
 #pragma once
 #include "someshit.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_win32.h"
+#include "imgui/imgui_impl_dx12.h"
+
+// ─── imgui ──────────────────────────────────────────────────────────────────
+void InitImGui(HWND hWnd);
+void ShutdownImGui();
+void BuildEditorUI();
 
 // ─── низкоуровневые шаги ────────────────────────────────────────────────────
 void DX_CreateDeviceAndQueue();
@@ -9,6 +17,7 @@ void DX_CreateSwapchain(HWND hWnd, UINT w, UINT h);
 void DX_CreateRTVs();
 void DX_CreateDepth(UINT w, UINT h);
 void DX_CreateSRVHeap(UINT numDescriptors = 1);
+void DX_CreateImGuiHeap();
 void DX_CreateFrameCmdObjects();
 void CreateCB();
 
@@ -26,3 +35,6 @@ void DX_LoadAssets();  // здесь позже вызовешь UploadOBJ/Uploa
 
 // ─── главный оркестратор ────────────────────────────────────────────────────
 void InitD3D12(HWND hWnd, UINT w, UINT h);
+
+void DX_Resize(UINT w, UINT h);
+void DX_Shutdown();

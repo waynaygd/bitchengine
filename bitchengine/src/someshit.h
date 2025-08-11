@@ -89,6 +89,16 @@ extern bool g_mouseHasPrev;
 
 extern bool g_appActive;   // есть ли фокус у нашего окна
 
+extern ComPtr<ID3D12DescriptorHeap> g_imguiHeap;
+
+constexpr UINT MAX_OBJECTS = 1024;
+constexpr UINT CB_ALIGN = 256;
+constexpr UINT CB_SIZE_ALIGNED = (sizeof(VSConstants) + (CB_ALIGN - 1)) & ~(CB_ALIGN - 1);
+
+extern bool g_dxReady;
+extern UINT g_pendingW;
+extern UINT g_pendingH;
+
 // --- текстуры ---
 struct TextureGPU {
     ComPtr<ID3D12Resource> res;
@@ -111,6 +121,8 @@ struct Entity {
     DirectX::XMFLOAT3 scale{ 1,1,1 };
 };
 extern std::vector<Entity> g_entities;
+
+static UINT g_width = 1280, g_height = 720;
 
 // регистраторы
 UINT RegisterTextureFromFile(const std::wstring& path); // возвращает texId
