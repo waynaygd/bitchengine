@@ -161,6 +161,7 @@
     <ClCompile Include="src\globals.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\obj_loader.cpp" />
+    <ClCompile Include="src\sceneloadsave.cpp" />
     <ClCompile Include="src\shaders_util.cpp" />
     <ClCompile Include="src\textures.cpp" />
   </ItemGroup>
@@ -180,6 +181,7 @@
     <ClInclude Include="src\gpu_upload.h" />
     <ClInclude Include="src\mesh.h" />
     <ClInclude Include="src\obj_loader.h" />
+    <ClInclude Include="src\sceneloadsave.h" />
     <ClInclude Include="src\someshit.h" />
     <ClInclude Include="src\textures.h" />
     <ClInclude Include="src\uploader.h" />

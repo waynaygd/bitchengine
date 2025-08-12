@@ -38,3 +38,8 @@ void InitD3D12(HWND hWnd, UINT w, UINT h);
 
 void DX_Resize(UINT w, UINT h);
 void DX_Shutdown();
+
+void DX_CreateSamplerHeap();
+static D3D12_FILTER ToFilter(int uiFilter);
+static D3D12_TEXTURE_ADDRESS_MODE ToAddress(int uiAddr);
+void DX_FillSamplers();

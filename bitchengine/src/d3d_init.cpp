@@ -14,33 +14,28 @@
 // ────────────────────────────────────────────────────────────────────────────
 void InitImGui(HWND hwnd)
 {
-    // 1. Создаём контекст
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // 2. Стиль
     ImGui::StyleColorsDark();
 
-    // 3. Инициализация платформы (Win32)
     ImGui_ImplWin32_Init(hwnd);
 
-    // 4. Инициализация рендерера (DX12)
     ImGui_ImplDX12_Init(
         g_device.Get(),
-        kFrameCount,                                 // количество кадров в свопчейне
-        DXGI_FORMAT_R8G8B8A8_UNORM,                 // формат RTV
-        g_imguiHeap.Get(),                          // твоя heap для imgui
+        kFrameCount,                      
+        DXGI_FORMAT_R8G8B8A8_UNORM,         
+        g_imguiHeap.Get(),                  
         g_imguiHeap->GetCPUDescriptorHandleForHeapStart(),
         g_imguiHeap->GetGPUDescriptorHandleForHeapStart()
     );
 
-    io.Fonts->AddFontDefault();      // на всякий случай добавим дефолтный шрифт
-    bool okBuild = io.Fonts->Build(); // пробуем собрать атлас на CPU
+    io.Fonts->AddFontDefault();   
+    bool okBuild = io.Fonts->Build();
     IM_ASSERT(okBuild && "Font atlas build failed (STB truetype disabled?)");
 
-    // Загрузим текстуру шрифта в GPU сейчас, чтобы NewFrame не делал этого лениво
     ImGui_ImplDX12_CreateDeviceObjects();
 }
 
@@ -67,6 +62,18 @@ void BuildEditorUI()
 {
     if (ImGui::Begin("Scene"))
     {
+        if (ImGui::Button("Save Scene")) {
+            if (!SaveScene(L"assets\\scenes\\autosave.scene"))
+                OutputDebugStringA("SaveScene failed\n");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load Scene")) {
+            if (!LoadScene(L"assets\\scenes\\autosave.scene"))
+                OutputDebugStringA("LoadScene failed\n");
+        }
+
+        ImGui::Separator();
+
         // список сущностей
         for (int i = 0; i < (int)g_entities.size(); ++i) {
             std::string label = "Entity " + std::to_string(i);
@@ -109,6 +116,26 @@ void BuildEditorUI()
                     ImGui::EndListBox();
                 }
                 ImGui::TreePop();
+            }
+        }
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Sampling"))
+    {
+        static const char* addrNames[] = { "Wrap","Mirror","Clamp","Border","MirrorOnce" };
+        static const char* filtNames[] = { "Point","Linear","Anisotropic" };
+
+        ImGui::Text("Address Mode:");
+        ImGui::Combo("##addr", &g_uiAddrMode, addrNames, IM_ARRAYSIZE(addrNames));
+
+        ImGui::Text("Filter:");
+        ImGui::Combo("##filter", &g_uiFilter, filtNames, IM_ARRAYSIZE(filtNames));
+
+        if (g_uiFilter == 2) {
+            if (ImGui::SliderInt("Anisotropy", &g_uiAniso, 1, 16)) {
+                // Пересоберём сэмплеры с новым уровнем aniso
+                DX_FillSamplers();
             }
         }
     }
@@ -253,33 +280,41 @@ void DX_EndUploadAndFlush()
 
 void DX_CreateRootSigAndPSO()
 {
-    // Root: b0 (VS CBV), t0 (PS SRV), s0 (PS sampler)
-    D3D12_DESCRIPTOR_RANGE range{};
-    range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 1;
-    range.BaseShaderRegister = 0;
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 1;
+    srvRange.BaseShaderRegister = 0; // t0
 
-    D3D12_ROOT_PARAMETER rp[2]{};
+    // Descriptor range для Sampler (s0..s0)
+    D3D12_DESCRIPTOR_RANGE sampRange{};
+    sampRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+    sampRange.NumDescriptors = 1;
+    sampRange.BaseShaderRegister = 0; // s0
+
+    D3D12_ROOT_PARAMETER rp[3]{};
+
+    // 0: CBV b0 (VS)
     rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rp[0].Descriptor.ShaderRegister = 0;
     rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
+    // 1: SRV table (t0) для PS
     rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rp[1].DescriptorTable.NumDescriptorRanges = 1;
-    rp[1].DescriptorTable.pDescriptorRanges = &range;
+    rp[1].DescriptorTable.pDescriptorRanges = &srvRange;
     rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    D3D12_STATIC_SAMPLER_DESC samp{};
-    samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    samp.ShaderRegister = 0; // s0
-    samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // 2: SAMPLER table (s0) для PS
+    rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rp[2].DescriptorTable.NumDescriptorRanges = 1;
+    rp[2].DescriptorTable.pDescriptorRanges = &sampRange;
+    rp[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rs{};
     rs.NumParameters = _countof(rp);
     rs.pParameters = rp;
-    rs.NumStaticSamplers = 1;
-    rs.pStaticSamplers = &samp;
+    rs.NumStaticSamplers = 0;           // ← никаких статических сэмплеров
+    rs.pStaticSamplers = nullptr;
     rs.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
         | D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS
         | D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS
@@ -384,7 +419,8 @@ void InitD3D12(HWND hWnd, UINT w, UINT h)
     DX_CreateRTVs();
     DX_CreateDepth(w, h);
     DX_CreateSRVHeap(128);
-
+    DX_CreateSamplerHeap();
+    DX_FillSamplers();
 
     DX_CreateImGuiHeap();
     InitImGui(g_hWnd);
@@ -495,3 +531,66 @@ void DX_Shutdown()
         dbg->EnableDebugLayer();
 #endif
 }
+
+void DX_CreateSamplerHeap()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC d{};
+    d.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+    d.NumDescriptors = 32; // с запасом
+    d.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    HR(g_device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&g_sampHeap)));
+    g_sampInc = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+}
+
+static D3D12_FILTER ToFilter(int uiFilter)
+{
+    switch (uiFilter)
+    {
+    case 0: return D3D12_FILTER_MIN_MAG_MIP_POINT;   // Point
+    case 1: return D3D12_FILTER_MIN_MAG_MIP_LINEAR;  // Linear
+    case 2: return D3D12_FILTER_ANISOTROPIC;         // Anisotropic
+    default: return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    }
+}
+
+static D3D12_TEXTURE_ADDRESS_MODE ToAddress(int uiAddr)
+{
+    switch (uiAddr)
+    {
+    case 0: return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    case 1: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+    case 2: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    case 3: return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    case 4: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR_ONCE;
+    default: return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    }
+}
+
+// 5 address × 3 filters = 15 s0-сэмплеров подряд: индекс = addr*3 + filter
+void DX_FillSamplers()
+{
+    auto cpu = g_sampHeap->GetCPUDescriptorHandleForHeapStart();
+
+    for (int addr = 0; addr < 5; ++addr)
+        for (int fil = 0; fil < 3; ++fil)
+        {
+            D3D12_SAMPLER_DESC s{};
+            s.Filter = ToFilter(fil);
+            s.AddressU = s.AddressV = s.AddressW = ToAddress(addr);
+            s.MipLODBias = 0.0f;
+            s.MaxAnisotropy = (fil == 2) ? g_uiAniso : 1; // для ANISO — ставим уровень
+            s.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+            s.MinLOD = 0.0f;
+            s.MaxLOD = D3D12_FLOAT32_MAX;
+            if (s.AddressU == D3D12_TEXTURE_ADDRESS_MODE_BORDER
+                || s.AddressV == D3D12_TEXTURE_ADDRESS_MODE_BORDER
+                || s.AddressW == D3D12_TEXTURE_ADDRESS_MODE_BORDER)
+            {
+                s.BorderColor[0] = 0; s.BorderColor[1] = 0; s.BorderColor[2] = 0; s.BorderColor[3] = 1; // чёрная рамка
+            }
+
+            auto dst = CD3DX12_CPU_DESCRIPTOR_HANDLE(cpu, addr * 3 + fil, g_sampInc);
+            g_device->CreateSampler(&s, dst);
+        }
+}
+

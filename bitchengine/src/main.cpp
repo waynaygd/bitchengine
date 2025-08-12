@@ -37,8 +37,8 @@ void RenderFrame()
 	// ВАЖНО: сначала RS, затем привязка shader-visible heaps
 	g_cmdList->SetGraphicsRootSignature(g_rootSig.Get());
 
-	ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get() };           // ← ДОБАВЛЕНО
-	g_cmdList->SetDescriptorHeaps(1, heaps);                       // ← ДОБАВЛЕНО
+	ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get(), g_sampHeap.Get() };
+	g_cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
 
 	g_cmdList->SetPipelineState(g_pso.Get());
 	g_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -73,6 +73,13 @@ void RenderFrame()
 		g_cmdList->DrawIndexedInstanced(m.indexCount, 1, 0, 0, 0);
 	}
 
+	// SAMPLER (s0) — выбираем из 15 пресетов
+	int idx = g_uiAddrMode * 3 + g_uiFilter;
+	CD3DX12_GPU_DESCRIPTOR_HANDLE sampGpu(
+		g_sampHeap->GetGPUDescriptorHandleForHeapStart(),
+		idx, g_sampInc);
+	g_cmdList->SetGraphicsRootDescriptorTable(2, sampGpu);
+
 
 	// --- ImGui frame begin ---
 	ImGui_ImplWin32_NewFrame();     // платформа
@@ -82,6 +89,11 @@ void RenderFrame()
 	// твой UI
 	BuildEditorUI();
 
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+		SaveScene(L"assets\\scenes\\autosave.scene");
+	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
+		LoadScene(L"assets\\scenes\\autosave.scene");
 	ImGui::Render();
 
 	// рендер UI (включаем imgui-heap)

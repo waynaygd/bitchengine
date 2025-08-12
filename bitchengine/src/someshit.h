@@ -1,4 +1,5 @@
 #pragma once
+#define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
 #include <wrl.h>
@@ -18,6 +19,7 @@
 #include "camera.h"
 #include "textures.h"
 #include "obj_loader.h"
+#include "sceneloadsave.h"
 
 //externals
 #include <d3dx12.h>
@@ -123,6 +125,14 @@ struct Entity {
 extern std::vector<Entity> g_entities;
 
 static UINT g_width = 1280, g_height = 720;
+
+extern ComPtr<ID3D12DescriptorHeap> g_sampHeap;
+extern UINT                         g_sampInc; // шаг
+
+// Выбор пользователя (для UI)
+extern int g_uiAddrMode;   // 0..4 (Wrap, Mirror, Clamp, Border, MirrorOnce)
+extern int g_uiFilter;   // 0..2 (Point, Linear, Anisotropic)
+extern int g_uiAniso;   // 1..16 (используется, если Anisotropic)
 
 // регистраторы
 UINT RegisterTextureFromFile(const std::wstring& path); // возвращает texId

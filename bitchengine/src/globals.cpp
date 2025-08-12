@@ -66,3 +66,11 @@ UINT g_srvInc = 0;
 std::vector<TextureGPU> g_textures;
 std::vector<MeshGPU>    g_meshes;
 std::vector<Entity>     g_entities;
+
+ComPtr<ID3D12DescriptorHeap> g_sampHeap;
+UINT                         g_sampInc = 0; // шаг
+
+// ¬ыбор пользовател€ (дл€ UI)
+int g_uiAddrMode = 0;   // 0..4 (Wrap, Mirror, Clamp, Border, MirrorOnce)
+int g_uiFilter = 1;   // 0..2 (Point, Linear, Anisotropic)
+int g_uiAniso = 8;   // 1..16 (используетс€, если Anisotropic)

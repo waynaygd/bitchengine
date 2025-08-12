@@ -57,6 +57,9 @@
     <ClCompile Include="external\imgui\imgui.cpp">
       <Filter>Файлы ресурсов\imgui</Filter>
     </ClCompile>
+    <ClCompile Include="src\sceneloadsave.cpp">
+      <Filter>Файлы ресурсов</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\someshit.h">
@@ -112,6 +115,9 @@
     </ClInclude>
     <ClInclude Include="external\imgui\imconfig.h">
       <Filter>Файлы заголовков\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="src\sceneloadsave.h">
+      <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
