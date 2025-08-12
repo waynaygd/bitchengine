@@ -121,10 +121,10 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="shaders\cube_vs.hlsl">
+    <Text Include="shaders\cube_ps.hlsl">
       <Filter>Исходные файлы</Filter>
     </Text>
-    <Text Include="shaders\cube_ps.hlsl">
+    <Text Include="shaders\cube_vs.hlsl">
       <Filter>Исходные файлы</Filter>
     </Text>
   </ItemGroup>

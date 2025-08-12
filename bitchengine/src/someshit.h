@@ -70,6 +70,8 @@ extern ComPtr<ID3D12PipelineState> g_pso;
 
 struct alignas(256) VSConstants {
     XMFLOAT4X4 mvp;
+    float uvMul;
+    float _pad[3];          
 };
 
 extern ComPtr<ID3D12Resource> g_cb;     // upload-ресурс под CB
@@ -133,6 +135,8 @@ extern UINT                         g_sampInc; // шаг
 extern int g_uiAddrMode;   // 0..4 (Wrap, Mirror, Clamp, Border, MirrorOnce)
 extern int g_uiFilter;   // 0..2 (Point, Linear, Anisotropic)
 extern int g_uiAniso;   // 1..16 (используется, если Anisotropic)
+
+extern float g_uvMul;
 
 // регистраторы
 UINT RegisterTextureFromFile(const std::wstring& path); // возвращает texId

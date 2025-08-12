@@ -187,17 +187,17 @@
     <ClInclude Include="src\uploader.h" />
   </ItemGroup>
   <ItemGroup>
-    <Text Include="shaders\cube_vs.hlsl">
-      <FileType>Document</FileType>
-    </Text>
-  </ItemGroup>
-  <ItemGroup>
     <Text Include="shaders\cube_ps.hlsl">
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="shaders\cube_vs.hlsl">
+      <FileType>Document</FileType>
+    </Text>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

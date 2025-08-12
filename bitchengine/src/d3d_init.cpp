@@ -133,11 +133,16 @@ void BuildEditorUI()
         ImGui::Combo("##filter", &g_uiFilter, filtNames, IM_ARRAYSIZE(filtNames));
 
         if (g_uiFilter == 2) {
-            if (ImGui::SliderInt("Anisotropy", &g_uiAniso, 1, 16)) {
-                // Пересоберём сэмплеры с новым уровнем aniso
+            int prev = g_uiAniso;
+            ImGui::SliderInt("Anisotropy", &g_uiAniso, 1, 16);
+            if (g_uiAniso != prev) {
+                // Перезапишем 15 дескрипторов с новым уровнем aniso
                 DX_FillSamplers();
             }
         }
+
+        ImGui::Text("Sampler idx = %d", g_uiAddrMode * 3 + g_uiFilter);
+        ImGui::SliderFloat("UV multiplier", &g_uvMul, 1.0f, 16.0f, "%.1f");
     }
     ImGui::End();
 }
@@ -285,7 +290,7 @@ void DX_CreateRootSigAndPSO()
     srvRange.NumDescriptors = 1;
     srvRange.BaseShaderRegister = 0; // t0
 
-    // Descriptor range для Sampler (s0..s0)
+    // SAMPLER table (s0)
     D3D12_DESCRIPTOR_RANGE sampRange{};
     sampRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
     sampRange.NumDescriptors = 1;
@@ -313,7 +318,7 @@ void DX_CreateRootSigAndPSO()
     D3D12_ROOT_SIGNATURE_DESC rs{};
     rs.NumParameters = _countof(rp);
     rs.pParameters = rp;
-    rs.NumStaticSamplers = 0;           // ← никаких статических сэмплеров
+    rs.NumStaticSamplers = 0;  
     rs.pStaticSamplers = nullptr;
     rs.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
         | D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS
@@ -340,7 +345,6 @@ void DX_CreateRootSigAndPSO()
     pso.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
     pso.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
     pso.InputLayout = { il, _countof(il) };
-    pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     pso.SampleMask = UINT_MAX;
     pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
@@ -351,6 +355,17 @@ void DX_CreateRootSigAndPSO()
     pso.RTVFormats[0] = g_backBufferFormat;
     pso.DSVFormat = g_depthFormat;
     pso.SampleDesc = { 1,0 };
+
+    auto blend = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    auto& rt0 = blend.RenderTarget[0];
+    rt0.BlendEnable = TRUE;
+    rt0.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    rt0.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    rt0.BlendOp = D3D12_BLEND_OP_ADD;
+    rt0.SrcBlendAlpha = D3D12_BLEND_ONE;
+    rt0.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    rt0.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    pso.BlendState = blend;
 
     HR(g_device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&g_pso)));
 }
@@ -532,31 +547,19 @@ void DX_Shutdown()
 #endif
 }
 
-void DX_CreateSamplerHeap()
-{
-    D3D12_DESCRIPTOR_HEAP_DESC d{};
-    d.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
-    d.NumDescriptors = 32; // с запасом
-    d.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    HR(g_device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&g_sampHeap)));
-    g_sampInc = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
-}
-
 static D3D12_FILTER ToFilter(int uiFilter)
 {
-    switch (uiFilter)
-    {
-    case 0: return D3D12_FILTER_MIN_MAG_MIP_POINT;   // Point
-    case 1: return D3D12_FILTER_MIN_MAG_MIP_LINEAR;  // Linear
-    case 2: return D3D12_FILTER_ANISOTROPIC;         // Anisotropic
+    switch (uiFilter) {
+    case 0: return D3D12_FILTER_MIN_MAG_MIP_POINT;
+    case 1: return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    case 2: return D3D12_FILTER_ANISOTROPIC;
     default: return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     }
 }
 
 static D3D12_TEXTURE_ADDRESS_MODE ToAddress(int uiAddr)
 {
-    switch (uiAddr)
-    {
+    switch (uiAddr) {
     case 0: return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     case 1: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
     case 2: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -566,7 +569,17 @@ static D3D12_TEXTURE_ADDRESS_MODE ToAddress(int uiAddr)
     }
 }
 
-// 5 address × 3 filters = 15 s0-сэмплеров подряд: индекс = addr*3 + filter
+void DX_CreateSamplerHeap()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC d{};
+    d.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+    d.NumDescriptors = 32; // запас
+    d.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    HR(g_device->CreateDescriptorHeap(&d, IID_PPV_ARGS(&g_sampHeap)));
+    g_sampInc = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+}
+
+// 5 address × 3 filters = 15 сэмплеров подряд: индекс = addr*3 + filter
 void DX_FillSamplers()
 {
     auto cpu = g_sampHeap->GetCPUDescriptorHandleForHeapStart();
@@ -578,10 +591,11 @@ void DX_FillSamplers()
             s.Filter = ToFilter(fil);
             s.AddressU = s.AddressV = s.AddressW = ToAddress(addr);
             s.MipLODBias = 0.0f;
-            s.MaxAnisotropy = (fil == 2) ? g_uiAniso : 1; // для ANISO — ставим уровень
+            s.MaxAnisotropy = (fil == 2) ? g_uiAniso : 1;
             s.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
             s.MinLOD = 0.0f;
             s.MaxLOD = D3D12_FLOAT32_MAX;
+
             if (s.AddressU == D3D12_TEXTURE_ADDRESS_MODE_BORDER
                 || s.AddressV == D3D12_TEXTURE_ADDRESS_MODE_BORDER
                 || s.AddressW == D3D12_TEXTURE_ADDRESS_MODE_BORDER)
@@ -594,3 +608,10 @@ void DX_FillSamplers()
         }
 }
 
+// Удобный геттер GPU-хэндла выбранного сэмплера
+D3D12_GPU_DESCRIPTOR_HANDLE DX_GetSamplerHandle(int addrMode, int filterMode)
+{
+    UINT idx = (UINT)(addrMode * 3 + filterMode);
+    return CD3DX12_GPU_DESCRIPTOR_HANDLE(
+        g_sampHeap->GetGPUDescriptorHandleForHeapStart(), idx, g_sampInc);
+}

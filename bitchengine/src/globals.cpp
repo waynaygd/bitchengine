@@ -74,3 +74,5 @@ UINT                         g_sampInc = 0; // шаг
 int g_uiAddrMode = 0;   // 0..4 (Wrap, Mirror, Clamp, Border, MirrorOnce)
 int g_uiFilter = 1;   // 0..2 (Point, Linear, Anisotropic)
 int g_uiAniso = 8;   // 1..16 (используется, если Anisotropic)
+
+float g_uvMul = 1.0f;

@@ -43,3 +43,4 @@ void DX_CreateSamplerHeap();
 static D3D12_FILTER ToFilter(int uiFilter);
 static D3D12_TEXTURE_ADDRESS_MODE ToAddress(int uiAddr);
 void DX_FillSamplers();
+D3D12_GPU_DESCRIPTOR_HANDLE DX_GetSamplerHandle(int addrMode, int filterMode);

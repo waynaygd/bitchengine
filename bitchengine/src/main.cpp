@@ -58,7 +58,9 @@ void RenderFrame()
 		XMMATRIX M = S * Rx * Ry * Rz * T;
 
 		VSConstants c{};
-		XMStoreFloat4x4(&c.mvp, XMMatrixTranspose(M * g_cam.View() * g_cam.Proj()));
+		DirectX::XMMATRIX MVP = M * g_cam.View() * g_cam.Proj();
+		XMStoreFloat4x4(&c.mvp, XMMatrixTranspose(MVP));
+		c.uvMul = g_uvMul;
 
 		// свой слот в CB (256‑byte aligned)
 		UINT offset = UINT(i) * CB_SIZE_ALIGNED;
@@ -67,6 +69,8 @@ void RenderFrame()
 
 		// текстура
 		g_cmdList->SetGraphicsRootDescriptorTable(1, t.gpu);
+		auto sampGpu = DX_GetSamplerHandle(g_uiAddrMode, g_uiFilter);
+		g_cmdList->SetGraphicsRootDescriptorTable(2, sampGpu);
 
 		g_cmdList->IASetVertexBuffers(0, 1, &m.vbv);
 		g_cmdList->IASetIndexBuffer(&m.ibv);
