@@ -674,10 +674,10 @@ void DX_LoadAssets()
     // ТЕКСТУРЫ
     UINT texError = RegisterTextureFromFile(L"assets\\textures\\default_white.png");
     UINT texDefault = RegisterTextureFromFile(L"assets\\textures\\error_tex.png");
-    UINT texZagar = RegisterTextureFromFile(L"assets\\textures\\bogdanov_diffuse.png");
+    UINT texZagar = RegisterTextureFromFile(L"assets\\textures\\zagarskih_normal.dds");
 
     // МЕШИ
-    UINT meshZagarskih = RegisterOBJ(L"assets\\models\\bogdanov.obj");
+    UINT meshZagarskih = RegisterOBJ(L"assets\\models\\zagarskih.obj");
 
     // СЦЕНА
     Scene_AddEntity(meshZagarskih, texZagar, { 0,0,0 }, { 0,0,0 }, { 1,1,1 });

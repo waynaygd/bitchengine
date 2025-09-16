@@ -143,7 +143,7 @@ void RenderFrame()
 	CBLighting L{};
 	L.camPos = g_cam.pos;
 	L.lightDir = { -0.4f, -1.0f, -0.2f };
-	L.lightColor = { 1.0f, 1.0f, 1.0f };
+	L.lightColor = { 0.7f, 0.2f, 0.1f };
 	L.debugMode = float(g_gbufDebugMode);
 
 	// world -> view для направления света
