@@ -147,7 +147,7 @@ void BuildEditorUI()
 
     if (ImGui::Begin("GBuffer Debug"))
     {
-        static const char* modes[] = { "Lighting", "Albedo", "Normal", "Position" };
+        static const char* modes[] = { "Shaded", "Albedo", "Normal", "Depth" };
         ImGui::Combo("View", &g_gbufDebugMode, modes, IM_ARRAYSIZE(modes));
     }
     ImGui::End();
@@ -293,36 +293,25 @@ void DX_CreateGBuffer(UINT w, UINT h)
             g_device->CreateShaderResourceView(res, &sd, SRV_CPU(slot));
         };
 
-    // Выделяем подряд 4 слота
-    UINT base = SRV_Alloc();                  // t0
-    /* проверим, что хватает места под ещё 3 подряд */
-    assert(base + 3 < g_srvCapacity);
+    UINT base0 = SRV_Alloc();     // t0 = Albedo
+    UINT base1 = SRV_Alloc();     // t1 = Normal
+    UINT base2 = SRV_Alloc();     // t2 = Depth
 
-    // Привязываем индексы
-    g_gbufAlbedoSRV = base + 0;
-    g_gbufNormalSRV = base + 1;
-    g_gbufPositionSRV = base + 2;
-    g_gbufDepthSRV = base + 3;
+    assert(base1 == base0 + 1 && base2 == base0 + 2);
 
-    // Создаём SRV
-    makeSRV2D(g_gbufAlbedo.Get(), fmtAlbedo, g_gbufAlbedoSRV);
-    makeSRV2D(g_gbufNormal.Get(), fmtNormal, g_gbufNormalSRV);
-    makeSRV2D(g_gbufPosition.Get(), fmtPosition, g_gbufPositionSRV);
+    g_gbufAlbedoSRV = base0;
+    g_gbufNormalSRV = base1;
+    g_gbufDepthSRV = base2;
 
-    // ВАЖНО: depth-ресурс уже создан в DX_CreateDepth → делаем SRV здесь
+    makeSRV2D(g_gbufAlbedo.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, g_gbufAlbedoSRV);
+    makeSRV2D(g_gbufNormal.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, g_gbufNormalSRV);
     makeSRV2D(g_depthBuffer.Get(), DXGI_FORMAT_R32_FLOAT, g_gbufDepthSRV);
 
     // На всякий случай оставим контроль
     assert(g_gbufNormalSRV == g_gbufAlbedoSRV + 1);
-    assert(g_gbufPositionSRV == g_gbufAlbedoSRV + 2);
-    assert(g_gbufDepthSRV == g_gbufAlbedoSRV + 3);
+    assert(g_gbufDepthSRV == g_gbufAlbedoSRV + 2);
 
-    // если в lighting-pass ты делаешь SetGraphicsRootDescriptorTable(0, SRV_GPU(g_gbufAlbedoSRV)),
-    // то убедись, что g_gbufNormalSRV == g_gbufAlbedoSRV + 1, а g_gbufPositionSRV == +2.
-    // Если твой аллокатор уже выдаёт подряд — отлично. Если нет, лучше сделать отдельный SRV-пул для GBuffer
-    // и выдавать ручками «базу» и «база + i».
 }
-
 
 void CreateGBufferRSandPSO()
 {
@@ -405,7 +394,7 @@ void CreateLightingRSandPSO()
     // t0..t2
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    range.NumDescriptors = 4;       // Albedo, Normal, Position
+    range.NumDescriptors = 3;       // Albedo, Normal, Position
     range.BaseShaderRegister = 0;   // t0
     range.RegisterSpace = 0;
     range.OffsetInDescriptorsFromTableStart = 0;
@@ -685,10 +674,10 @@ void DX_LoadAssets()
     // ТЕКСТУРЫ
     UINT texError = RegisterTextureFromFile(L"assets\\textures\\default_white.png");
     UINT texDefault = RegisterTextureFromFile(L"assets\\textures\\error_tex.png");
-    UINT texZagar = RegisterTextureFromFile(L"assets\\textures\\zagarskih_normal.dds");
+    UINT texZagar = RegisterTextureFromFile(L"assets\\textures\\bogdanov_diffuse.png");
 
     // МЕШИ
-    UINT meshZagarskih = RegisterOBJ(L"assets\\models\\zagarskih.obj");
+    UINT meshZagarskih = RegisterOBJ(L"assets\\models\\bogdanov.obj");
 
     // СЦЕНА
     Scene_AddEntity(meshZagarskih, texZagar, { 0,0,0 }, { 0,0,0 }, { 1,1,1 });
@@ -763,6 +752,7 @@ void InitD3D12(HWND hWnd, UINT w, UINT h)
 
     CreatePerObjectCB(1024);
     CreateUploadCB<CBLighting>(g_cbLighting, g_cbLightingPtr);
+    std::memset(g_cbLightingPtr, 0, (sizeof(CBLighting) + 255) & ~255);
 
     DX_CreateImGuiHeap();
     InitImGui(g_hWnd);
@@ -816,16 +806,30 @@ void DX_Resize(UINT w, UINT h)
         g_device->CreateRenderTargetView(g_backBuffers[i].Get(), nullptr, h);
     }
 
-    // depth заново
     g_depthBuffer.Reset();
-    D3D12_CLEAR_VALUE clear{}; clear.Format = g_depthFormat; clear.DepthStencil.Depth = 1.0f;
-    auto depthDesc = CD3DX12_RESOURCE_DESC::Tex2D(g_depthFormat, w, h, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
-    CD3DX12_HEAP_PROPERTIES hp(D3D12_HEAP_TYPE_DEFAULT);
-    HR(g_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&g_depthBuffer)));
-    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{}; dsv.Format = g_depthFormat; dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-    g_device->CreateDepthStencilView(g_depthBuffer.Get(), &dsv, g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
+    // ресурс = TYPELESS
+    D3D12_CLEAR_VALUE clear{};
+    clear.Format = DEPTH_DSV_FMT;                    // D32_FLOAT (формат DSV для clear value)
+    clear.DepthStencil = { 1.0f, 0 };
+
+    auto depthDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DEPTH_RES_FMT,                               // R32_TYPELESS  ← ВАЖНО
+        w, h, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+    CD3DX12_HEAP_PROPERTIES hp(D3D12_HEAP_TYPE_DEFAULT);
+    HR(g_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE,
+        &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
+        IID_PPV_ARGS(&g_depthBuffer)));
+
+    // DSV = D32_FLOAT
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+    dsv.Format = DEPTH_DSV_FMT;                      // D32_FLOAT
+    dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    g_device->CreateDepthStencilView(g_depthBuffer.Get(), &dsv,
+        g_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // Пересоздаём G-buffer, где ты создаёшь и SRV для depth (R32_FLOAT)
     DX_DestroyGBuffer();
     DX_CreateGBuffer(w, h);
 

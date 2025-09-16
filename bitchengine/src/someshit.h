@@ -185,12 +185,13 @@ extern uint8_t* g_cbPerObjectPtr;
 extern UINT                   g_cbStride;        // выровненный шаг (>= sizeof(CBPerObject), кратен 256)
 extern UINT                   g_cbMaxPerFrame;   // макс. объектов на кадр
 
-struct CBLighting {
-    DirectX::XMFLOAT3 camPos; float debugMode;   // <- добавили debugMode
-    DirectX::XMFLOAT3 lightDir; float _pad1;
+struct alignas(16) CBLighting {
+    DirectX::XMFLOAT3 camPos;   float debugMode;
+    DirectX::XMFLOAT3 lightDir; float _pad1;   // В VIEW-SPACE!
     DirectX::XMFLOAT3 lightColor; float _pad2;
-    DirectX::XMFLOAT4X4 invP;
+    DirectX::XMFLOAT4X4 invP;                 // inverse(Projection), column-major в HLSL
 };
+static_assert(sizeof(CBLighting) % 16 == 0, "CB alignment");
 
 extern ComPtr<ID3D12Resource> g_cbLighting;
 extern uint8_t* g_cbLightingPtr;

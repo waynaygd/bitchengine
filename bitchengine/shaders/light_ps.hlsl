@@ -6,14 +6,12 @@ cbuffer CBLighting : register(b1)
     float _pad1;
     float3 lightColor;
     float _pad2;
-
-    float4x4 invP; // inverse(Projection) “–јЌ—ѕќЌ»–ќ¬јЌЌјя при записи с CPU
+    float4x4 invP;
 };
 
 Texture2D gAlbedo : register(t0);
 Texture2D gNormalR : register(t1);
-Texture2D gMaterial : register(t2); // пока не используетс€, резерв
-Texture2D gDepth : register(t3);
+Texture2D gDepth : register(t2);
 SamplerState gSamp : register(s0);
 
 float3 ReconstructPosV(float2 uv, float depth01, float4x4 invP)
