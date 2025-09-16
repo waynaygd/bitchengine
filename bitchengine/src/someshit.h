@@ -54,6 +54,10 @@ extern D3D12_VIEWPORT g_viewport;
 extern D3D12_RECT     g_scissor;
 
 extern ComPtr<ID3D12DescriptorHeap> g_srvHeap;
+extern UINT g_srvInc;                     // increment SRV heap
+extern UINT g_srvNext;    // Следующий свободный слот
+extern UINT g_srvCapacity; // Всего слотов
+
 extern ComPtr<ID3D12Resource> g_tex;
 
 extern ComPtr<ID3D12CommandAllocator>     g_uploadAlloc;
@@ -111,7 +115,6 @@ struct TextureGPU {
     UINT heapIndex = UINT(-1);
 };
 
-extern UINT g_srvInc;                     // increment SRV heap
 extern std::vector<TextureGPU> g_textures;
 
 extern std::vector<MeshGPU> g_meshes;
@@ -123,6 +126,7 @@ struct Entity {
     DirectX::XMFLOAT3 pos{ 0,0,0 };
     DirectX::XMFLOAT3 rotDeg{ 0,0,0 }; // pitch,yaw,roll в градусах
     DirectX::XMFLOAT3 scale{ 1,1,1 };
+    float uvMul = 1.0f;
 };
 extern std::vector<Entity> g_entities;
 
@@ -136,13 +140,83 @@ extern int g_uiAddrMode;   // 0..4 (Wrap, Mirror, Clamp, Border, MirrorOnce)
 extern int g_uiFilter;   // 0..2 (Point, Linear, Anisotropic)
 extern int g_uiAniso;   // 1..16 (используется, если Anisotropic)
 
+enum : int { ADDR_WRAP = 0, ADDR_MIRROR, ADDR_CLAMP, ADDR_BORDER, ADDR_MIRROR_ONCE, ADDR_COUNT = 5 };
+enum : int { FILT_POINT = 0, FILT_LINEAR, FILT_ANISO, FILT_COUNT = 3 };
+
 extern float g_uvMul;
 
 // регистраторы
 UINT RegisterTextureFromFile(const std::wstring& path); // возвращает texId
 UINT RegisterOBJ(const std::wstring& path);             // возвращает meshId
-UINT CreateCubeMeshGPU();                                // meshId для примитива
+UINT CreateCubeMeshGPU();   // meshId для примитива
 
+// gbuffer
+extern ComPtr<ID3D12DescriptorHeap> g_gbufRTVHeap;
+extern UINT g_gbufRTVInc;
+
+extern ComPtr<ID3D12Resource> g_gbufAlbedo;
+extern ComPtr<ID3D12Resource> g_gbufNormal;
+extern ComPtr<ID3D12Resource> g_gbufPosition;
+
+// SRV индексы в общей g_srvHeap (для lighting pass/отладки)
+extern UINT g_gbufAlbedoSRV;
+extern UINT g_gbufNormalSRV;
+extern UINT g_gbufPositionSRV;
+extern UINT g_gbufDepthSRV;
+
+extern ComPtr<ID3D12RootSignature> g_rsGBuffer;
+extern ComPtr<ID3D12PipelineState> g_psoGBuffer;
+
+extern ComPtr<ID3D12RootSignature> g_rsLighting;
+extern ComPtr<ID3D12PipelineState> g_psoLighting;
+
+// CBs
+struct CBPerObject {
+    DirectX::XMFLOAT4X4 M;
+    DirectX::XMFLOAT4X4 V;
+    DirectX::XMFLOAT4X4 P;
+    DirectX::XMFLOAT4X4 MIT;
+    float uvMul; float _pad[3];
+};
+
+
+extern ComPtr<ID3D12Resource> g_cbPerObject;
+extern uint8_t* g_cbPerObjectPtr;
+extern UINT                   g_cbStride;        // выровненный шаг (>= sizeof(CBPerObject), кратен 256)
+extern UINT                   g_cbMaxPerFrame;   // макс. объектов на кадр
+
+struct CBLighting {
+    DirectX::XMFLOAT3 camPos; float debugMode;   // <- добавили debugMode
+    DirectX::XMFLOAT3 lightDir; float _pad1;
+    DirectX::XMFLOAT3 lightColor; float _pad2;
+    DirectX::XMFLOAT4X4 invP;
+};
+
+extern ComPtr<ID3D12Resource> g_cbLighting;
+extern uint8_t* g_cbLightingPtr;
+
+extern int g_gbufDebugMode; // 0=Lighting, 1=Albedo, 2=Normal, 3=Position
+
+enum { 
+    GBUF_ALBEDO = 0, 
+    GBUF_NORMAL = 1, 
+    GBUF_POSITION = 2, 
+    GBUF_COUNT = 3 
+};
+
+extern ComPtr<ID3D12Resource> g_gbuf[GBUF_COUNT];
+extern D3D12_CPU_DESCRIPTOR_HANDLE g_gbufRTV[GBUF_COUNT];
+extern D3D12_GPU_DESCRIPTOR_HANDLE g_gbufSRV[GBUF_COUNT];
+
+// Текущее состояние каждой текстуры
+extern D3D12_RESOURCE_STATES g_gbufState[GBUF_COUNT];
+
+extern D3D12_RESOURCE_STATES depthState;
+extern D3D12_RESOURCE_STATES depthStateB;
+
+
+
+// gbuffer
 
 void InitD3D12(HWND hWnd, UINT width, UINT height);
 void RenderFrame();

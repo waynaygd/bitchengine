@@ -199,6 +199,20 @@
       <FileType>Document</FileType>
     </Text>
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="shaders\gbuf_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\gbuf_vs.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\light_ps.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+    <Text Include="shaders\light_vs.hlsl">
+      <FileType>Document</FileType>
+    </Text>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="..\packages\directxtex_desktop_win10.2025.7.10.1\build\native\directxtex_desktop_win10.targets" Condition="Exists('..\packages\directxtex_desktop_win10.2025.7.10.1\build\native\directxtex_desktop_win10.targets')" />

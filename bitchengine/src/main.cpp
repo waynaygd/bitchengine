@@ -3,29 +3,44 @@
 
 void RenderFrame()
 {
-	IM_ASSERT(ImGui::GetCurrentContext() != nullptr);
+	// ===== 0) Reset =====
 	HR(g_alloc[g_frameIndex]->Reset());
-	HR(g_cmdList->Reset(g_alloc[g_frameIndex].Get(), g_pso.Get()));
+	HR(g_cmdList->Reset(g_alloc[g_frameIndex].Get(), nullptr));
 
-	auto toRT = CD3DX12_RESOURCE_BARRIER::Transition(
-		g_backBuffers[g_frameIndex].Get(),
-		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	g_cmdList->ResourceBarrier(1, &toRT);
+	const D3D12_GPU_VIRTUAL_ADDRESS cbBaseGPU =
+		g_cbPerObject->GetGPUVirtualAddress() + (UINT64)g_cbStride * g_cbMaxPerFrame * g_frameIndex;
+	uint8_t* cbBaseCPU =
+		g_cbPerObjectPtr + (size_t)g_cbStride * g_cbMaxPerFrame * g_frameIndex;
 
-	CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(
-		g_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-		g_frameIndex, g_rtvInc);
-	D3D12_CPU_DESCRIPTOR_HANDLE dsv = g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	UINT drawIdx = 0;
 
-	g_cmdList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+	// ===== 1) GEOMETRY PASS -> GBUFFER (MRT) =====
+
+	// ★ Переводим все GBuffer в RENDER_TARGET (и обновляем их текущие состояния)
+	for (int i = 0; i < GBUF_COUNT; ++i)
+		Transition(g_cmdList.Get(), g_gbuf[i].Get(), g_gbufState[i], D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+	Transition(g_cmdList.Get(), g_depthBuffer.Get(), depthStateB, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+	// ★ Depth обычно всё время держим в D3D12_RESOURCE_STATE_DEPTH_WRITE,
+	// если где-то переводили — верни обратно:
+	// Transition(g_cmdList.Get(), g_depthBuffer.Get(), g_depthState, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+	// MRT + DSV
+	D3D12_CPU_DESCRIPTOR_HANDLE mrt[2] = { g_gbufRTV[0], g_gbufRTV[1] };
+	auto dsv = g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	g_cmdList->OMSetRenderTargets(2, mrt, FALSE, &dsv);
+
+	// viewport/scissor
 	g_cmdList->RSSetViewports(1, &g_viewport);
 	g_cmdList->RSSetScissorRects(1, &g_scissor);
 
-	const FLOAT clear[4] = { 0.78f, 0.949f, 0.996f, 1.0f };
-	g_cmdList->ClearRenderTargetView(rtv, clear, 0, nullptr);
+	// clear MRT+depth
+	const float c0[4] = { 0, 0, 0, 1 }; // Albedo  (как в CreateGBuffer)
+	const float c1[4] = { 0, 0, 1, 1 }; // Normal  (как в CreateGBuffer: в+Z)
+	g_cmdList->ClearRenderTargetView(g_gbufRTV[0], c0, 0, nullptr);
+	g_cmdList->ClearRenderTargetView(g_gbufRTV[1], c1, 0, nullptr);
 	g_cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-	// dt + ввод
 	static LARGE_INTEGER s_freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
 	static LARGE_INTEGER s_prev = [] { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t; }();
 	LARGE_INTEGER now; QueryPerformanceCounter(&now);
@@ -34,63 +49,128 @@ void RenderFrame()
 	UpdateInput(dt);
 	g_cam.UpdateView();
 
-	// ВАЖНО: сначала RS, затем привязка shader-visible heaps
-	g_cmdList->SetGraphicsRootSignature(g_rootSig.Get());
+	// RS/PSO (GBuffer)
+	g_cmdList->SetGraphicsRootSignature(g_rsGBuffer.Get());
+	g_cmdList->SetPipelineState(g_psoGBuffer.Get());
 
-	ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get(), g_sampHeap.Get() };
-	g_cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
+	// ★ В этом пассе мы сэмплируем текстуры материалов => нужна и SRV‑heap, и SAMP‑heap
+	{
+		ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get(), g_sampHeap.Get() };
+		g_cmdList->SetDescriptorHeaps(2, heaps);
+	}
 
-	g_cmdList->SetPipelineState(g_pso.Get());
+	using namespace DirectX;
 	g_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	for (size_t i = 0; i < g_entities.size(); ++i)
+	for (const Entity& e : g_entities)
 	{
-		const Entity& e = g_entities[i];
 		const MeshGPU& m = g_meshes[e.meshId];
 		const TextureGPU& t = g_textures[e.texId];
 
-		// world
+		// World
 		XMMATRIX S = XMMatrixScaling(e.scale.x, e.scale.y, e.scale.z);
 		XMMATRIX Rx = XMMatrixRotationX(XMConvertToRadians(e.rotDeg.x));
 		XMMATRIX Ry = XMMatrixRotationY(XMConvertToRadians(e.rotDeg.y));
 		XMMATRIX Rz = XMMatrixRotationZ(XMConvertToRadians(e.rotDeg.z));
 		XMMATRIX T = XMMatrixTranslation(e.pos.x, e.pos.y, e.pos.z);
+
 		XMMATRIX M = S * Rx * Ry * Rz * T;
+		XMMATRIX V = g_cam.View();
+		XMMATRIX P = g_cam.Proj();
 
-		VSConstants c{};
-		DirectX::XMMATRIX MVP = M * g_cam.View() * g_cam.Proj();
-		XMStoreFloat4x4(&c.mvp, XMMatrixTranspose(MVP));
-		c.uvMul = g_uvMul;
+		XMMATRIX MIT = XMMatrixTranspose(XMMatrixInverse(nullptr, M));
 
-		// свой слот в CB (256‑byte aligned)
-		UINT offset = UINT(i) * CB_SIZE_ALIGNED;
-		std::memcpy(g_cbPtr + offset, &c, sizeof(c));
-		g_cmdList->SetGraphicsRootConstantBufferView(0, g_cb->GetGPUVirtualAddress() + offset);
+		CBPerObject c{};
+		XMStoreFloat4x4(&c.M, XMMatrixTranspose(M));
+		XMStoreFloat4x4(&c.V, XMMatrixTranspose(V));
+		XMStoreFloat4x4(&c.P, XMMatrixTranspose(P));
+		XMStoreFloat4x4(&c.MIT, XMMatrixTranspose(MIT));  // <- та же схема
+		c.uvMul = e.uvMul;
 
-		// текстура
+		if (drawIdx >= g_cbMaxPerFrame) { /* опционально: assert или увеличь maxPerFrame */ }
+		std::memcpy(cbBaseCPU + (size_t)drawIdx * g_cbStride, &c, sizeof(c));
+
+		D3D12_GPU_VIRTUAL_ADDRESS gpuAddr = cbBaseGPU + (UINT64)drawIdx * g_cbStride;
+		g_cmdList->SetGraphicsRootConstantBufferView(0, gpuAddr);
+
+		// t0 = текстура материала
 		g_cmdList->SetGraphicsRootDescriptorTable(1, t.gpu);
-		auto sampGpu = DX_GetSamplerHandle(g_uiAddrMode, g_uiFilter);
-		g_cmdList->SetGraphicsRootDescriptorTable(2, sampGpu);
 
 		g_cmdList->IASetVertexBuffers(0, 1, &m.vbv);
 		g_cmdList->IASetIndexBuffer(&m.ibv);
 		g_cmdList->DrawIndexedInstanced(m.indexCount, 1, 0, 0, 0);
+
+		++drawIdx;
 	}
 
-	// SAMPLER (s0) — выбираем из 15 пресетов
-	int idx = g_uiAddrMode * 3 + g_uiFilter;
-	CD3DX12_GPU_DESCRIPTOR_HANDLE sampGpu(
-		g_sampHeap->GetGPUDescriptorHandleForHeapStart(),
-		idx, g_sampInc);
-	g_cmdList->SetGraphicsRootDescriptorTable(2, sampGpu);
+	// ===== 2) GBuffer -> SRV для LIGHTING =====
+	for (int i = 0; i < GBUF_COUNT; ++i)
+		Transition(g_cmdList.Get(), g_gbuf[i].Get(), g_gbufState[i], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
+	Transition(g_cmdList.Get(), g_depthBuffer.Get(), depthState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-	// --- ImGui frame begin ---
-	ImGui_ImplWin32_NewFrame();     // платформа
-	ImGui_ImplDX12_NewFrame();      // РЕНДЕРЕР ← обязательно до ImGui::NewFrame()
+	// ===== 3) LIGHTING PASS -> BACKBUFFER =====
+
+	// backbuffer: PRESENT -> RT
+	auto bbToRT = CD3DX12_RESOURCE_BARRIER::Transition(
+		g_backBuffers[g_frameIndex].Get(),
+		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	g_cmdList->ResourceBarrier(1, &bbToRT);
+
+	// RTV backbuffer
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(
+		g_rtvHeap->GetCPUDescriptorHandleForHeapStart(), g_frameIndex, g_rtvInc);
+	g_cmdList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+
+	const float clearBB[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
+	g_cmdList->ClearRenderTargetView(rtv, clearBB, 0, nullptr);
+
+	// RS/PSO (Lighting)
+	g_cmdList->SetGraphicsRootSignature(g_rsLighting.Get());
+	g_cmdList->SetPipelineState(g_psoLighting.Get());
+
+	// ★ В этом пассе читаем GBuffer (SRV) — сэмплер тут обычно не нужен,
+	// но если шейдер ожидает s0 — тоже подключи обе кучи для простоты:
+	{
+		ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get(), g_sampHeap.Get() };
+		g_cmdList->SetDescriptorHeaps(2, heaps);
+	}
+
+	// Таблица SRV t0..t2: albedo/normal/position — подряд в g_srvHeap
+	g_cmdList->SetGraphicsRootDescriptorTable(0, SRV_GPU(g_gbufAlbedoSRV));
+
+	// CB b1 — свет/дебаг
+	CBLighting L{};
+	L.camPos = g_cam.pos;
+	L.lightDir = { -0.4f, -1.0f, -0.2f };
+	L.lightColor = { 1.0f, 1.0f, 1.0f };
+	L.debugMode = float(g_gbufDebugMode);
+
+	// world -> view для направления света
+	XMMATRIX V = g_cam.View();
+	XMVECTOR Lw = XMVector3Normalize(XMLoadFloat3(&L.lightDir));
+	XMVECTOR Lv = XMVector3TransformNormal(Lw, V);
+	Lv = XMVector3Normalize(Lv);
+	XMStoreFloat3(&L.lightDir, Lv);
+
+	// invP для реконструкции позиции
+	XMMATRIX  P = g_cam.Proj();
+	XMMATRIX  invP = XMMatrixInverse(nullptr, P);
+	XMStoreFloat4x4(&L.invP, XMMatrixTranspose(invP));
+
+	// ТЕПЕРЬ пишем в CB
+	std::memcpy(g_cbLightingPtr, &L, sizeof(L));
+	g_cmdList->SetGraphicsRootConstantBufferView(1, g_cbLighting->GetGPUVirtualAddress());
+
+	// fullscreen triangle
+	g_cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	g_cmdList->DrawInstanced(3, 1, 0, 0);
+
+	// ===== 4) IMGUI поверх бэкбуфера =====
+	ImGui_ImplWin32_NewFrame();
+	ImGui_ImplDX12_NewFrame();
 	ImGui::NewFrame();
 
-	// твой UI
 	BuildEditorUI();
 
 	ImGuiIO& io = ImGui::GetIO();
@@ -98,25 +178,23 @@ void RenderFrame()
 		SaveScene(L"assets\\scenes\\autosave.scene");
 	if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
 		LoadScene(L"assets\\scenes\\autosave.scene");
+
 	ImGui::Render();
 
-	// рендер UI (включаем imgui-heap)
-	ID3D12DescriptorHeap* imguiHeaps[] = { g_imguiHeap.Get() };
-	g_cmdList->SetDescriptorHeaps(1, imguiHeaps);
-	ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmdList.Get());
+	{
+		ID3D12DescriptorHeap* imguiHeaps[] = { g_imguiHeap.Get() };
+		g_cmdList->SetDescriptorHeaps(1, imguiHeaps);
+		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), g_cmdList.Get());
+	}
 
-	// вернуть свою кучу, если нужно
-	ID3D12DescriptorHeap* sceneHeaps[] = { g_srvHeap.Get() };
-	g_cmdList->SetDescriptorHeaps(1, sceneHeaps);
-
-
-	auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
+	// ===== 5) Backbuffer: RT -> PRESENT =====
+	auto bbToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
 		g_backBuffers[g_frameIndex].Get(),
 		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-	g_cmdList->ResourceBarrier(1, &toPresent);
+	g_cmdList->ResourceBarrier(1, &bbToPresent);
 
+	// submit + present + sync
 	HR(g_cmdList->Close());
-
 	ID3D12CommandList* lists[] = { g_cmdList.Get() };
 	g_cmdQueue->ExecuteCommandLists(1, lists);
 	HR(g_swapChain->Present(1, 0));
@@ -129,6 +207,8 @@ void RenderFrame()
 	}
 	g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
 }
+
+
 
 
 void WaitForGPU() {

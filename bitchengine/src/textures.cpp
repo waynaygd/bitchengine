@@ -84,67 +84,113 @@ static D3D12_GPU_DESCRIPTOR_HANDLE SRV_GPU(UINT index) {
 
 UINT RegisterTextureFromFile(const std::wstring& path)
 {
-    // 1) загрузка через DirectXTex
-    ScratchImage img = LoadTextureFile(path);
-    const TexMetadata& meta = img.GetMetadata();
+    using namespace DirectX;
 
-    // 2) создаём DEFAULT ресурс под текстуру
+    // 1) Загружаем картинку (твоя функция может уже приводить к RGBA8_UNORM)
+    ScratchImage img = LoadTextureFile(path);
+    TexMetadata meta = img.GetMetadata();
+
+    // 2) (важно) если это WIC/PNG/JPG и мипов нет — сгенерировать мип-цепочку
+    if (meta.mipLevels <= 1
+        && !IsCompressed(meta.format)
+        && meta.dimension == TEX_DIMENSION_TEXTURE2D
+        && meta.arraySize == 1)
+    {
+        ScratchImage mipChain;
+        // TEX_FILTER_FANT — адекватный фильтр для мипов
+        HRESULT hr = GenerateMipMaps(
+            img.GetImages(), img.GetImageCount(), meta,
+            TEX_FILTER_FANT, 0, mipChain);
+        if (SUCCEEDED(hr)) {
+            img = std::move(mipChain);
+            meta = img.GetMetadata();
+        }
+    }
+
+    // 3) Создаём DEFAULT ресурс под ВСЕ мипы
     ComPtr<ID3D12Resource> tex;
     {
         auto desc = CD3DX12_RESOURCE_DESC::Tex2D(
-            meta.format, meta.width, (UINT)meta.height, (UINT16)meta.arraySize, (UINT16)meta.mipLevels);
+            meta.format,
+            meta.width, (UINT)meta.height,
+            (UINT16)meta.arraySize,
+            (UINT16)meta.mipLevels
+        );
+
         CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
         HR(g_device->CreateCommittedResource(
             &heapDefault, D3D12_HEAP_FLAG_NONE,
-            &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&tex)));
+            &desc, D3D12_RESOURCE_STATE_COMMON,
+            nullptr, IID_PPV_ARGS(&tex)));
     }
 
-    // 3) upload + копирование всех мипов
+    // 4) Upload-ресурс на все подресурсы
+    ComPtr<ID3D12Resource> up;
     {
-        UINT subCount = (UINT)img.GetImageCount();
-        UINT64 uploadSize = GetRequiredIntermediateSize(tex.Get(), 0, subCount);
-        ComPtr<ID3D12Resource> up;
+        UINT numSubs = (UINT)img.GetImageCount();
+        UINT64 uploadSize = GetRequiredIntermediateSize(tex.Get(), 0, numSubs);
 
         CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
-        auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize); // локальная переменная
-
+        auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
         HR(g_device->CreateCommittedResource(
             &heapUpload, D3D12_HEAP_FLAG_NONE,
-            &bufDesc,  // теперь можно передать адрес
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&up)));
-
-        DX_BeginUpload();
-        auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(
-            tex.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-        g_uploadList->ResourceBarrier(1, &toCopy);
-
-        std::vector<D3D12_SUBRESOURCE_DATA> subs;
-        PrepareUpload(g_device.Get(), img.GetImages(), subCount, meta, subs);
-        UpdateSubresources(g_uploadList.Get(), tex.Get(), up.Get(), 0, 0, subCount, subs.data());
-
-        auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
-            tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        g_uploadList->ResourceBarrier(1, &toSRV);
-        DX_EndUploadAndFlush();
+            &bufDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr, IID_PPV_ARGS(&up)));
     }
 
-    // 4) разместим SRV в куче (следующий свободный индекс)
-    UINT idx = (UINT)g_textures.size();     // 0 для первой, 1 для второй и т.д.
+    // 5) Копирование всех мипов
+    HR(g_uploadAlloc->Reset());
+    HR(g_uploadList->Reset(g_uploadAlloc.Get(), nullptr));
+
+    // COMMON -> COPY_DEST
+    auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(
+        tex.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+    g_uploadList->ResourceBarrier(1, &toCopy);
+
+    // Подготовка и UpdateSubresources
+    std::vector<D3D12_SUBRESOURCE_DATA> subs;
+    PrepareUpload(g_device.Get(), img.GetImages(), img.GetImageCount(), meta, subs);
+
+    UpdateSubresources(g_uploadList.Get(), tex.Get(), up.Get(),
+        0, 0, (UINT)subs.size(), subs.data());
+
+    // COPY_DEST -> PIXEL_SHADER_RESOURCE
+    auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
+        tex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    g_uploadList->ResourceBarrier(1, &toSRV);
+
+    HR(g_uploadList->Close());
+    {
+        ID3D12CommandList* lists[] = { g_uploadList.Get() };
+        g_cmdQueue->ExecuteCommandLists(1, lists);
+    }
+    WaitForGPU();
+
+    // 6) Создаём SRV (sRGB для WIC форматов — важно для PNG)
+    auto ToSRGB = [](DXGI_FORMAT f) {
+        switch (f) {
+        case DXGI_FORMAT_R8G8B8A8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        case DXGI_FORMAT_B8G8R8A8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+        default: return f;
+        }
+        };
+
+    UINT slot = SRV_Alloc();
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = meta.format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Texture2D.MipLevels = (UINT)meta.mipLevels;
+
+    g_device->CreateShaderResourceView(tex.Get(), &srvDesc, SRV_CPU(slot));
+
     TextureGPU t{};
     t.res = tex;
-    t.heapIndex = idx;
-    t.cpu = SRV_CPU(idx);                   // baseCPU + idx * g_srvInc
-    t.gpu = SRV_GPU(idx);                   // baseGPU + idx * g_srvInc
+    t.cpu = SRV_CPU(slot);
+    t.gpu = SRV_GPU(slot);
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-    sd.Format = meta.format;
-    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sd.Texture2D.MipLevels = (UINT)meta.mipLevels;
+    g_textures.push_back(t);
 
-    g_device->CreateShaderResourceView(tex.Get(), &sd, t.cpu);
-    g_textures.push_back(std::move(t));
-    return idx; // texId
+    return (UINT)g_textures.size() - 1;
 }

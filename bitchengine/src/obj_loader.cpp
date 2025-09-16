@@ -63,13 +63,22 @@ bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12Graphic
         v.py = attrib.vertices[3 * idx.vertex_index + 1];
         v.pz = attrib.vertices[3 * idx.vertex_index + 2];
 
-        // color = белый (если хочешь — парси tinyobj::attrib.colors)
-        v.r = v.g = v.b = 1.0f;
+        // normal (если есть в файле)
+        static bool s_missingNormals = false;
+        if (idx.normal_index >= 0 && !attrib.normals.empty()) {
+            v.nx = attrib.normals[3 * idx.normal_index + 0];
+            v.ny = attrib.normals[3 * idx.normal_index + 1];
+            v.nz = attrib.normals[3 * idx.normal_index + 2];
+        }
+        else {
+            v.nx = v.ny = v.nz = 0.0f;
+            s_missingNormals = true; // отметим, что нормалей нет — посчитаем потом
+        }
 
-        // uv (если были)
+        // uv (как было)
         if (idx.texcoord_index >= 0 && !attrib.texcoords.empty()) {
             v.u = attrib.texcoords[2 * idx.texcoord_index + 0];
-            v.v = 1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]; // V-флип под D3D
+            v.v = 1.0f - attrib.texcoords[2 * idx.texcoord_index + 1];
         }
         else {
             v.u = v.v = 0.0f;
@@ -115,6 +124,36 @@ bool LoadOBJToGPU(const std::wstring& pathW, ID3D12Device* device, ID3D12Graphic
             out.ib, ibUpload, D3D12_RESOURCE_STATE_INDEX_BUFFER);
     }
 
+    // если у каких-то вершин нормали нулевые — генерим
+    auto len2 = [](float x, float y, float z) { return x * x + y * y + z * z; };
+    bool needGen = false;
+    for (auto& vv : vertices) if (len2(vv.nx, vv.ny, vv.nz) < 1e-12f) { needGen = true; break; }
+
+    if (needGen) {
+        // обнулим
+        for (auto& vv : vertices) { vv.nx = vv.ny = vv.nz = 0.0f; }
+        // аккумулируем нормали граней
+        for (size_t t = 0; t < indices32.size(); t += 3) {
+            uint32_t i0 = indices32[t + 0], i1 = indices32[t + 1], i2 = indices32[t + 2];
+            XMVECTOR p0 = XMVectorSet(vertices[i0].px, vertices[i0].py, vertices[i0].pz, 0);
+            XMVECTOR p1 = XMVectorSet(vertices[i1].px, vertices[i1].py, vertices[i1].pz, 0);
+            XMVECTOR p2 = XMVectorSet(vertices[i2].px, vertices[i2].py, vertices[i2].pz, 0);
+            XMVECTOR fn = XMVector3Normalize(XMVector3Cross(p1 - p0, p2 - p0));
+
+            XMFLOAT3 f; XMStoreFloat3(&f, fn);
+            for (uint32_t ii : {i0, i1, i2}) {
+                vertices[ii].nx += f.x;
+                vertices[ii].ny += f.y;
+                vertices[ii].nz += f.z;
+            }
+        }
+        // нормализуем пер-вершинно
+        for (auto& vv : vertices) {
+            XMVECTOR n = XMVector3Normalize(XMVectorSet(vv.nx, vv.ny, vv.nz, 0));
+            XMStoreFloat3(reinterpret_cast<XMFLOAT3*>(&vv.nx), n);
+        }
+    }
+
     g_uploadKeepAlive.push_back(vbUpload);
     g_uploadKeepAlive.push_back(ibUpload);
 
@@ -149,7 +188,7 @@ UINT RegisterOBJ(const std::wstring& path)
 
 struct CubeVertex {
     DirectX::XMFLOAT3 pos;
-    DirectX::XMFLOAT3 col;
+    DirectX::XMFLOAT3 nrm; // было col
     DirectX::XMFLOAT2 uv;
 };
 
@@ -157,24 +196,24 @@ UINT CreateCubeMeshGPU()
 {
     // 24 уникальные вершины (по 4 на грань) с UV
     static const CubeVertex v[] = {
-        // +Z (front)
-        {{-1,-1, 1},{1,0,0},{0,1}}, {{ 1,-1, 1},{0,1,0},{1,1}},
-        {{ 1, 1, 1},{0,0,1},{1,0}}, {{-1, 1, 1},{1,1,0},{0,0}},
-        // -Z (back)
-        {{ 1,-1,-1},{1,0,1},{0,1}}, {{-1,-1,-1},{0,1,1},{1,1}},
-        {{-1, 1,-1},{1,1,1},{1,0}}, {{ 1, 1,-1},{0.3f,0.3f,0.3f},{0,0}},
-        // +X (right)
-        {{ 1,-1, 1},{1,0,0},{0,1}}, {{ 1,-1,-1},{0,1,0},{1,1}},
-        {{ 1, 1,-1},{0,0,1},{1,0}}, {{ 1, 1, 1},{1,1,0},{0,0}},
-        // -X (left)
-        {{-1,-1,-1},{1,0,1},{0,1}}, {{-1,-1, 1},{0,1,1},{1,1}},
-        {{-1, 1, 1},{1,1,1},{1,0}}, {{-1, 1,-1},{0.3f,0.3f,0.3f},{0,0}},
-        // +Y (top)
-        {{-1, 1, 1},{1,0,0},{0,1}}, {{ 1, 1, 1},{0,1,0},{1,1}},
-        {{ 1, 1,-1},{0,0,1},{1,0}}, {{-1, 1,-1},{1,1,0},{0,0}},
-        // -Y (bottom)
-        {{-1,-1,-1},{1,0,1},{0,1}}, {{ 1,-1,-1},{0,1,1},{1,1}},
-        {{ 1,-1, 1},{1,1,1},{1,0}}, {{-1,-1, 1},{0.3f,0.3f,0.3f},{0,0}},
+        // +Z
+        {{-1,-1, 1},{0,0, 1},{0,1}}, {{ 1,-1, 1},{0,0, 1},{1,1}},
+        {{ 1, 1, 1},{0,0, 1},{1,0}}, {{-1, 1, 1},{0,0, 1},{0,0}},
+        // -Z
+        {{ 1,-1,-1},{0,0,-1},{0,1}}, {{-1,-1,-1},{0,0,-1},{1,1}},
+        {{-1, 1,-1},{0,0,-1},{1,0}}, {{ 1, 1,-1},{0,0,-1},{0,0}},
+        // +X
+        {{ 1,-1, 1},{1,0,0},{0,1}}, {{ 1,-1,-1},{1,0,0},{1,1}},
+        {{ 1, 1,-1},{1,0,0},{1,0}}, {{ 1, 1, 1},{1,0,0},{0,0}},
+        // -X
+        {{-1,-1,-1},{-1,0,0},{0,1}}, {{-1,-1, 1},{-1,0,0},{1,1}},
+        {{-1, 1, 1},{-1,0,0},{1,0}}, {{-1, 1,-1},{-1,0,0},{0,0}},
+        // +Y
+        {{-1, 1, 1},{0,1,0},{0,1}}, {{ 1, 1, 1},{0,1,0},{1,1}},
+        {{ 1, 1,-1},{0,1,0},{1,0}}, {{-1, 1,-1},{0,1,0},{0,0}},
+        // -Y
+        {{-1,-1,-1},{0,-1,0},{0,1}}, {{ 1,-1,-1},{0,-1,0},{1,1}},
+        {{ 1,-1, 1},{0,-1,0},{1,0}}, {{-1,-1, 1},{0,-1,0},{0,0}},
     };
 
     static const uint16_t idx[] = {
@@ -246,6 +285,7 @@ UINT CreateCubeMeshGPU()
 
     mesh.vbv.BufferLocation = mesh.vb->GetGPUVirtualAddress();
     mesh.vbv.StrideInBytes = sizeof(CubeVertex);
+    assert(mesh.vbv.StrideInBytes == 32);
     mesh.vbv.SizeInBytes = vbBytes;
 
     mesh.ibv.BufferLocation = mesh.ib->GetGPUVirtualAddress();

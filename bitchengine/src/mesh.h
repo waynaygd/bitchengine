@@ -9,7 +9,7 @@ using namespace DirectX;
 
 struct VertexOBJ {
     float px, py, pz;   // POSITION
-    float r, g, b;      // COLOR
+    float nx, ny, nz;   // NORMAL   <-- ÄÎÁÀÂÈËÈ
     float u, v;         // TEXCOORD
 };
 
